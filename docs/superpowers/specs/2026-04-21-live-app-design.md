@@ -69,15 +69,21 @@ Hand crop derived from seg mask bounding box + 10% padding. If mask is empty (no
 
 ## Rendering
 
-Fullscreen OpenCV window. Raw webcam frame as base layer. All overlays composited on top in this order:
+Fullscreen OpenCV window. Raw webcam frame as base layer. Two dedicated functions in `renderer.py`:
 
-1. **Seg mask fill** — semi-transparent color fill over mask region (~15% opacity). Color driven by gesture class (each of 18 gestures gets a distinct hue).
-2. **Delaunay triangulation** — computed from contour points sampled at ~40 points. Faint white lines (~10% opacity) connecting triangulated interior.
-3. **Contour glow** — 1-2px bright edge trace of the mask outline. Opacity scales with gesture confidence (higher confidence = brighter).
-4. **Gesture panel** — frosted dark card, bottom-left. Gesture name (monospace, white) + thin horizontal confidence bar below it.
-5. **Status panel** — frosted dark card, bottom-right. FPS + hand present dot indicator.
+**`draw_mesh(frame, mask, confidence, gesture_idx) → frame`**
+Draws the hand mesh overlay. Called every frame when mask is non-empty.
+1. **Seg mask fill** — semi-transparent color fill over mask region (~15% opacity). Color driven by gesture class index (18 distinct hues via HSV wheel).
+2. **Delaunay triangulation** — sample ~40 evenly-spaced contour points, run `cv2.Subdiv2D`, draw triangle edges as faint white lines (~10% opacity) clipped inside mask bounds.
+3. **Contour glow** — `cv2.drawContours` 1-2px width, bright white, opacity scales linearly with confidence (conf 0.4 → opacity 0.0, conf 1.0 → opacity 1.0).
 
-Confidence below 0.4 → all overlays hidden, panels show "—".
+**`draw_ui(frame, gesture, confidence, second, second_conf, fps, present) → frame`**
+Draws the two frosted card panels. Called every frame regardless of hand presence.
+- Bottom-left: gesture name + confidence bar + runner-up in smaller text.
+- Bottom-right: fps + presence dot.
+- Confidence below 0.4 → panels show "—", mesh hidden.
+
+Both functions take a frame copy and return it — no side effects.
 
 ---
 
@@ -100,11 +106,15 @@ Single port (default `127.0.0.1:9000`). All values normalized to frame dimension
 /hand/aspect_ratio         float    bbox w/h
 /hand/orientation          float    degrees, principal axis from mask moments
 /hand/solidity             float    0–1  area / convex hull area (1 = convex fist)
-/hand/contour              float[]  x1 y1 x2 y2 ... normalized contour vertices
+/hand/contour              float[]  x1 y1 x2 y2 ... normalized contour vertices (~40 evenly-sampled points, same set used for Delaunay triangulation — guaranteed consistent between OSC and visual)
+/hand/triangle_count       int      number of Delaunay triangles in mesh
+/hand/triangles            float[]  x1a y1a x2a y2a x3a y3a ... normalized triangle vertices (triangle_count * 6 floats)
 
 /hand/velocity             float float  dx dy normalized centroid delta per frame
 /hand/speed                float    magnitude of velocity
 ```
+
+**Mesh data guarantee:** `/hand/contour` and `/hand/triangles` are computed once per frame from the same 40 sampled points used to render the Delaunay mesh overlay. OSC data and visual are always in sync.
 
 ---
 
