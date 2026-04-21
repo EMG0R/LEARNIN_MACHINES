@@ -51,13 +51,13 @@ All `nn.Module` from scratch. Random init (Kaiming/Xavier).
 
 ---
 
-### Layer 1: Mask R-CNN
+### Layer 1: General Object Detection (Jake)
 
-ResNet-50 + FPN backbone, RPN, ROI Align, detection head (cls + bbox), mask head (binary pixel mask → contour). 80 COCO classes.
+ResNet-50 + FPN backbone, detection head, 80 COCO classes. Being trained by Jake on COCO 2017.
 
 **Dataset:** COCO 2017 — 118K images, 80 classes
-- Downloaded from `wget http://images.cocodataset.org/zips/train2017.zip` + val + annotations
-- Parse with `pycocotools`. During training, possible resize down
+- `pycocotools` annotations
+- Status: **in training** (Jake)
 
 ---
 
@@ -71,15 +71,15 @@ MobileNet-v2 style backbone, multi-scale SSD head, 5-point landmark regression (
 - Possible Resize images
 ---
 
-### Layer 2b: Hand Detector
+### Layer 2b: Hand Segmentation ✓ TRAINED
 
-SSD-style backbone, hand bbox + 21-point landmark regression (finger joints + wrist). 
+U-Net (4-level encoder-decoder, ~2M params). Input: 192×192 RGB. Output: binary hand mask. No landmarks, no skeleton — mask shape is the hand representation throughout the entire pipeline.
 
-**Dataset:** FreiHAND — 130K images, 3D landmarks
-- Downloaded from [lmb.informatik.uni-freiburg.de/projects/freihand](https://lmb.informatik.uni-freiburg.de/projects/freihand)
-- Annotations: JSON with 3D keypoints + camera intrinsics. **Project 3D → 2D:** `uv = K @ xyz / xyz[2]` per keypoint using provided `K` matrix.
-- Possible resize to 512px. 
-- Derive bboxes from projected 2D landmarks with padding.
+**Dataset:** FreiHAND — 130,240 RGB images + 32,560 masks, augmented with Places365 backgrounds (36,500 scenes). Skin-tone augmentation for demographic diversity.
+- Trained: `HAND_JOB/hand_seg/` — checkpoint at `hand_seg/checkpoints/best.pt`
+- Val IoU: ~0.987
+
+All hand overlays and OSC data are derived from the seg mask. No landmark model will be built.
 
 ---
 
@@ -107,42 +107,42 @@ ResNet-18 style (4 residual groups, global avg pool, FC → 4). Input: **48×48*
 
 ---
 
-### Layer 3b: Gesture Classifier
+### Layer 3b: Gesture Classifier ✓ TRAINED
 
-Small CNN (3-4 conv blocks, global avg pool, FC → 18). Input: **64×64** hand crop.
+4-block wide CNN, global avg pool, FC → 18. Input: **96×96** hand crop (from seg mask bbox).
 
-**Dataset:** HaGRID — full dataset, all 18 classes, ~552K images, ~716GB
-- Download everything. This is an interactive installation — recognizing any hand gesture seen is the point.
-- Annotations: JSON per-image with bbox + label. Crop hand region, resize to 64×64, normalize.
-- Script: `hagrid download` (no subset filter)
+**Dataset:** HaGRID 30k 384p sample — 18 classes, ~30K images
+- Trained: `HAND_JOB/gesture/` — checkpoint at `gesture/checkpoints/best.pt`
+- Val F1: 0.984
 
 ---
 
 ## OSC Output
 
-Layer 1 sends all detections every frame. Default target: `127.0.0.1:9000`.
+Single port `127.0.0.1:9000`. All values normalized to frame dimensions (0–1) unless noted. Fires every frame. When no hand present, only `/hand/present 0` sends.
 
 ```
-/detection/count              → int
-/detection/{i}/class          → string
-/detection/{i}/confidence     → float
-/detection/{i}/bbox           → [x, y, w, h] normalized
-/detection/{i}/mask           → [x1,y1, x2,y2, ...] contour points
+/hand/present              int      1 or 0
+/hand/fps                  float    current inference fps
 
-/person/{i}/face/emotion      → string
-/person/{i}/face/confidence   → float
-/person/{i}/face/landmarks    → [x1,y1, ...] 5 points
-/person/{i}/hand/gesture      → string
-/person/{i}/hand/confidence   → float
-/person/{i}/hand/landmarks    → [x1,y1, ...] 21 points
-/person/{i}/hand/finger/{f}/extension  → float 0–1 (f: thumb/index/middle/ring/pinky)
-/person/{i}/hand/finger/{f}/pinch      → float 0–1 (distance thumb tip to finger tip, normalized)
-/person/{i}/hand/palm_facing           → float -1–1 (toward cam vs away)
-/person/{i}/hand/rotation              → float degrees (wrist rotation around forearm axis)
-/person/{i}/hand/spread                → float 0–1 (avg angle between extended fingers)
-/person/{i}/pose/keypoints    → [x1,y1,c1, x2,y2,c2, ...] 17 points (x,y normalized + confidence per joint)
-/person/{i}/pose/confidence   → float (mean joint confidence)
+/hand/gesture              string   e.g. "like"
+/hand/gesture/confidence   float    0–1
+/hand/gesture/second       string   runner-up class
+/hand/gesture/second_conf  float    0–1
+
+/hand/area                 float    0–1  fraction of frame covered by mask
+/hand/centroid             float float  x y normalized
+/hand/bbox                 float float float float  x y w h normalized
+/hand/aspect_ratio         float    bbox w/h
+/hand/orientation          float    degrees, principal axis from mask moments
+/hand/solidity             float    0–1  area / convex hull area (1 = convex fist)
+/hand/contour              float[]  x1 y1 x2 y2 ... normalized contour vertices
+
+/hand/velocity             float float  dx dy normalized centroid delta per frame
+/hand/speed                float    magnitude of velocity
 ```
+
+When Layer 1 (Jake) is integrated, schema extends with `/detection/{i}/` and `/person/{i}/` namespaces per cascade architecture.
 
 ---
 
@@ -154,23 +154,12 @@ The rendered frame is the TD source feed.
 
 **Face skeletal trace** — connect the 5 landmarks into a minimal face structure: left-eye↔right-eye, eye↔nose, nose↔mouth-left, nose↔mouth-right, mouth-left↔mouth-right. Dots at each landmark. Sparse but readable as a face.
 
-**Hand skeleton** — 21-joint tree drawn as connected bones: finger segments + wrist. Per-finger color or uniform, your call.
+**Hand mesh overlay** — derived entirely from U-Net seg mask, no landmarks:
+- *Contour glow* — 1-2px bright edge trace of mask outline. Opacity scales with gesture confidence.
+- *Semi-transparent fill* — ~15% opacity color fill, hue per gesture class.
+- *Delaunay triangulation* — ~40 sampled contour points triangulated, faint white mesh lines (~10% opacity) inside the mask.
 
-**Hand overlays (all derived from 21 landmarks, zero extra compute):**
-- *Wrist-to-tip fan* — 5 lines from wrist to each fingertip. Morphs as fingers extend/curl. Claw-like when all curl, starburst when open.
-- *Fingertip polygon* — connect tips of all extended fingers in order. Collapses as fingers fold. Pentagon when fully open, shrinks dynamically.
-- *Knuckle web* — lines between MCP base knuckles across the palm (pinky↔ring↔middle↔index↔thumb base). Circuit-board look.
-- *Proximity threads* — draw a line between any two fingertips within N pixels of each other. Appears/vanishes reactively as fingers approach and separate.
-- *Joint curl arcs* — small arc drawn at each knuckle joint, radius proportional to bend angle. Reads as a tick mark showing how curled each segment is.
-- *Palm centroid spokes* — compute centroid of all 21 points, draw lines from centroid to every landmark. Dense and radial, collapses to a tight cluster on fist.
-- *Velocity trails* — if tracking hand across frames, draw fading tail lines from each fingertip. Fast movement = long bright trail.
-
-**Per-finger computed state (all derived, no model):**
-- Extension ratio per finger: `tip_distance / base_distance` → 0.0 (fully curled) to 1.0 (fully extended)
-- Pinch distance: thumb tip to each other fingertip (normalized to palm width)
-- Palm facing: dot product of palm normal vs camera Z axis → facing / away
-- Hand rotation: wrist-to-middle-MCP angle relative to vertical
-- Finger spread: angle between adjacent extended finger vectors
+No hand skeleton. No landmarks. Mask shape is the hand representation.
 
 **Body pose skeleton** — 17 COCO keypoints connected as bones (see Layer 2c). Drawn as thin lines + small joint dots. Looks like a stick figure trace, not a filled silhouette.
 
