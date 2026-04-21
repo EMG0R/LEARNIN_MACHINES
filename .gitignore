@@ -1,0 +1,3 @@
+HAND_JOB/checkpoints/*
+!HAND_JOB/checkpoints/.gitkeep
+*.pt
