@@ -50,3 +50,35 @@ def process_split(
         merged = combine_instance_masks(masks, mid_to_class, size)
         merged.save(out_dir / f"{image_id}.png")
     print(f"wrote {len(list(out_dir.glob('*.png')))} masks to {out_dir}")
+
+
+def main():
+    import argparse
+    import json
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--split", choices=["train", "val", "test"], required=True)
+    args = ap.parse_args()
+
+    root = Path(__file__).resolve().parent.parent / "shared" / "datasets" / "openimages_v7"
+    split_root = root / args.split
+    index_path = split_root / "instance_index.json"
+    with open(index_path) as f:
+        index = json.load(f)
+
+    cm_path = Path(__file__).resolve().parent.parent / "seg" / "class_map.json"
+    with open(cm_path) as f:
+        mid_to_class = json.load(f)["by_mid"]
+
+    # Convert relative mask filenames to absolute paths
+    instance_dir = split_root / "instance_masks"
+    expanded = {
+        iid: [(instance_dir / fname, mid) for fname, mid in entries]
+        for iid, entries in index.items()
+    }
+
+    out_dir = split_root / "masks"
+    process_split(split_root, expanded, mid_to_class, out_dir)
+
+
+if __name__ == "__main__":
+    main()
