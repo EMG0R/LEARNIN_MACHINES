@@ -95,21 +95,22 @@ class BalancedSourceSampler(Sampler[int]):
         self.samples = samples
         self.batch_size = batch_size
         self.num_batches = num_batches
-        self.per_source = batch_size // len(SOURCES)
+        self.per_source = batch_size // max(len(SOURCES), 1)  # keep batch size stable; filled from active sources
         self.rng = random.Random(seed)
         self._source_indices: dict[str, list[int]] = {src: [] for src in SOURCES}
         for idx, s in enumerate(samples):
             self._source_indices[s.source].append(idx)
-        for src, lst in self._source_indices.items():
-            if not lst:
-                raise ValueError(f"no samples for source {src!r}")
+        self._active_sources = [src for src, lst in self._source_indices.items() if lst]
+        if not self._active_sources:
+            raise ValueError("no samples found for any source")
 
     def __iter__(self):
+        per = self.batch_size // len(self._active_sources)
         for _ in range(self.num_batches):
             batch: list[int] = []
-            for src in SOURCES:
+            for src in self._active_sources:
                 pool = self._source_indices[src]
-                batch.extend(self.rng.choices(pool, k=self.per_source))
+                batch.extend(self.rng.choices(pool, k=per))
             self.rng.shuffle(batch)
             yield from batch
 

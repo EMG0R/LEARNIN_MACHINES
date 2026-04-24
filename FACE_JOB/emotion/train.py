@@ -47,21 +47,42 @@ LOG_PATH  = CKPT_DIR / f"emotion_{RUN_TAG}.log.json"
 
 
 # -------- LOAD ALL SOURCES --------
+def _has_ferplus() -> bool:
+    return (BASE / "data/fer/fer2013.csv").exists() and (BASE / "data/fer/fer2013new.csv").exists()
+
+def _has_rafdb() -> bool:
+    return (BASE / "data/rafdb/list_patition_label.txt").exists()
+
+def _has_expw() -> bool:
+    return (BASE / "data/expw/label.lst").exists()
+
+
 def load_all() -> list[EmotionSample]:
     samples: list[EmotionSample] = []
     if "ferplus" in DATASETS:
-        fer_csv  = BASE / "data/fer/fer2013.csv"
-        new_csv  = BASE / "data/fer/fer2013new.csv"
-        for img, lab in load_ferplus(fer_csv, new_csv):
-            samples.append(EmotionSample(image=img, label=lab, source="ferplus"))
+        if _has_ferplus():
+            fer_csv = BASE / "data/fer/fer2013.csv"
+            new_csv = BASE / "data/fer/fer2013new.csv"
+            for img, lab in load_ferplus(fer_csv, new_csv):
+                samples.append(EmotionSample(image=img, label=lab, source="ferplus"))
+        else:
+            print("[warn] ferplus requested but data/fer/fer2013.csv not found — skipping", flush=True)
     if "rafdb" in DATASETS:
-        root = BASE / "data/rafdb"
-        for p, lab in load_rafdb(root, "train"):
-            samples.append(EmotionSample(image=p, label=lab, source="rafdb"))
+        if _has_rafdb():
+            root = BASE / "data/rafdb"
+            for p, lab in load_rafdb(root, "train"):
+                samples.append(EmotionSample(image=p, label=lab, source="rafdb"))
+        else:
+            print("[warn] rafdb requested but data/rafdb/list_patition_label.txt not found — skipping", flush=True)
     if "expw" in DATASETS:
-        root = BASE / "data/expw"
-        for p, lab in load_expw(root):
-            samples.append(EmotionSample(image=p, label=lab, source="expw"))
+        if _has_expw():
+            root = BASE / "data/expw"
+            for p, lab in load_expw(root):
+                samples.append(EmotionSample(image=p, label=lab, source="expw"))
+        else:
+            print("[warn] expw requested but data/expw/label.lst not found — skipping", flush=True)
+    if not samples:
+        raise RuntimeError("No emotion samples loaded. Run python3 FACE_JOB/download_data.py first.")
     return samples
 
 

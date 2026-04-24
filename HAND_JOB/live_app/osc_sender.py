@@ -2,7 +2,8 @@ import cv2
 import numpy as np
 from scipy.spatial import Delaunay
 from pythonosc.udp_client import SimpleUDPClient
-from live_app.config import OSC_IP, OSC_PORT, CONTOUR_POINTS, CONF_THRESHOLD
+from live_app.config import OSC_IP, OSC_PORT, CONF_THRESHOLD
+from live_app.renderer import CONTOUR_POINTS
 
 
 class OSCSender:

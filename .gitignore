@@ -1,8 +1,43 @@
-HAND_JOB/checkpoints/*
-!HAND_JOB/checkpoints/.gitkeep
-*.pt
+# system
+.DS_Store
+**/.DS_Store
 
+# python envs
+.venv/
+__pycache__/
+*.pyc
+
+# model checkpoints
+*.pt
+*.pth
+*.ckpt
+**/*.log.json
+
+# images & video
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.tif
+*.webp
+*.mp4
+*.avi
+*.mov
+
+# datasets / archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.csv
+*.json
+*.lst
+
+# specific dirs
 FACE_JOB/data/
 FACE_JOB/logs/
-FACE_JOB/**/checkpoints/*.pt
-FACE_JOB/**/checkpoints/*.log.json
+HAND_JOB/data/
+HAND_JOB/checkpoints/*
+!HAND_JOB/checkpoints/.gitkeep
