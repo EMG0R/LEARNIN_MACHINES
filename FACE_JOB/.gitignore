@@ -1,0 +1,6 @@
+data/
+logs/
+**/checkpoints/*.pt
+**/checkpoints/*.log.json
+__pycache__/
+.venv/

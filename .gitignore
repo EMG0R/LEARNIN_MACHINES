@@ -1,3 +1,8 @@
 HAND_JOB/checkpoints/*
 !HAND_JOB/checkpoints/.gitkeep
 *.pt
+
+FACE_JOB/data/
+FACE_JOB/logs/
+FACE_JOB/**/checkpoints/*.pt
+FACE_JOB/**/checkpoints/*.log.json
