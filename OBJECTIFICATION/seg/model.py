@@ -97,3 +97,29 @@ class Backbone(nn.Module):
         p4 = self.s3_c3(self.s3_down(p3))           # 20x20
         p5 = self.s4_sppf(self.s4_c3(self.s4_down(p4)))  # 10x10
         return p2, p3, p4, p5
+
+
+class Neck(nn.Module):
+    """Top-down FPN. P5 -> upsample + lateral concat with P4 -> C3 fuse,
+    repeat down to P2. Returns (N2, N3, N4) — N5 isn't used by the head.
+    """
+    def __init__(self):
+        super().__init__()
+        # Lateral 1x1 reductions before concat, to keep neck channels modest
+        self.lat4 = conv_bn_act(512, 256, k=1)  # P5 -> match P4 channels
+        self.fuse4 = C3(256 + 256, 256, n=1, shortcut=False)
+
+        self.lat3 = conv_bn_act(256, 128, k=1)  # N4 -> match P3 channels
+        self.fuse3 = C3(128 + 128, 128, n=1, shortcut=False)
+
+        self.lat2 = conv_bn_act(128, 64, k=1)   # N3 -> match P2 channels
+        self.fuse2 = C3(64 + 64, 64, n=1, shortcut=False)
+
+    def _up(self, x):
+        return F.interpolate(x, scale_factor=2, mode="nearest")
+
+    def forward(self, p2, p3, p4, p5):
+        n4 = self.fuse4(torch.cat([self._up(self.lat4(p5)), p4], dim=1))   # 20x20, 256
+        n3 = self.fuse3(torch.cat([self._up(self.lat3(n4)), p3], dim=1))   # 40x40, 128
+        n2 = self.fuse2(torch.cat([self._up(self.lat2(n3)), p2], dim=1))   # 80x80,  64
+        return n2, n3, n4

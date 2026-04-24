@@ -31,3 +31,16 @@ def test_backbone_returns_four_pyramid_levels():
     assert p3.shape == (1, 128,  40,  40)
     assert p4.shape == (1, 256,  20,  20)
     assert p5.shape == (1, 512,  10,  10)
+
+from OBJECTIFICATION.seg.model import Neck
+
+def test_neck_top_down_fusion():
+    p2 = torch.randn(1,  64, 80, 80)
+    p3 = torch.randn(1, 128, 40, 40)
+    p4 = torch.randn(1, 256, 20, 20)
+    p5 = torch.randn(1, 512, 10, 10)
+    neck = Neck()
+    n2, n3, n4 = neck(p2, p3, p4, p5)
+    assert n4.shape == (1, 256, 20, 20)
+    assert n3.shape == (1, 128, 40, 40)
+    assert n2.shape == (1,  64, 80, 80)
