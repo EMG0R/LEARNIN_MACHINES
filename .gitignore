@@ -7,8 +7,7 @@
 __pycache__/
 *.pyc
 
-# model checkpoints
-*.pt
+# model checkpoints (tracked — small enough for git)
 *.pth
 *.ckpt
 **/*.log.json

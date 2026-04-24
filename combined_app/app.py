@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""
+Integrated real-time vision: hand + face, mesh + labels, dynamic color.
+
+Run from LEARNIN_MACHINES/:
+    python3 -m combined_app.app
+
+Press Esc to quit.
+
+Pipeline (3 threads):
+  capture    → shared latest_frame  (lock-protected, always newest)
+  inference  → shared latest_result (lock-protected, always newest)
+  main       → reads both at full camera fps, overlays last known result
+
+Face cascade is skipped automatically if checkpoints are missing.
+"""
+import time
+import os
+import threading
+import numpy as np
+import cv2
+import torch
+import pygame
+import torchvision.transforms.functional as TF
+from PIL import Image
+from pathlib import Path
+
+from combined_app.config import (
+    WEBCAM_INDEX, FRAME_W, FRAME_H,
+    CONF_THRESHOLD, FACE_CONF_THR,
+    FACE_CLASS_SKIN, FACE_CLASS_EYE_L, FACE_CLASS_EYE_R, FACE_CLASS_MOUTH,
+    GESTURE_COLORS_BGR,
+    FACE_DET_CKPT, FACE_PARTS_CKPT, EMOTION_CKPT,
+)
+from combined_app.models import (
+    load_all_models, device,
+    postprocess_hand_mask, hand_present,
+    run_gesture, GestureSmoother,
+    run_face_det, run_face_parts, run_emotion_batch, EmotionSmoother,
+)
+from combined_app.renderer import draw_mesh, draw_label, draw_face_aura, label_anchor_raw
+
+FACE_DET_INTERVAL = 8
+N_ZONES           = 3
+LABEL_EMA         = 0.18
+_EM_ORDER   = ["happy", "sad", "neutral", "surprise", "anger", "fear", "disgust"]
+_EM_TO_GIDX = [0, 3, 6, 9, 12, 15, 2]
+
+FACE_ENABLED = all(Path(p).exists() for p in [FACE_DET_CKPT, FACE_PARTS_CKPT, EMOTION_CKPT])
+
+
+def _face_mesh_data(parts_map, box, fh, fw):
+    x1, y1, x2, y2 = box
+    bw, bh = x2 - x1, y2 - y1
+
+    def _to_full(cls_ids):
+        region = np.zeros_like(parts_map, dtype=np.uint8)
+        for c in cls_ids:
+            region[parts_map == c] = 255
+        full = np.zeros((fh, fw), dtype=np.uint8)
+        full[y1:y2, x1:x2] = cv2.resize(region, (bw, bh), interpolation=cv2.INTER_NEAREST)
+        return full
+
+    return _to_full([FACE_CLASS_SKIN]), {
+        "eye_l": _to_full([FACE_CLASS_EYE_L]),
+        "eye_r": _to_full([FACE_CLASS_EYE_R]),
+        "mouth": _to_full([FACE_CLASS_MOUTH]),
+    }
+
+
+def _capture_loop(cap, bg_sub, shared, stop_event):
+    while not stop_event.is_set():
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        fg = bg_sub.apply(frame)
+        with shared["frame_lock"]:
+            shared["frame"] = frame
+            shared["fg"]    = fg
+
+
+def _inference_loop(models, shared, stop_event):
+    seg_model   = models["seg"]
+    gest_model  = models["gest"]
+    class_names = models["class_names"]
+    fd_model    = models.get("fd")
+    fp_model    = models.get("fp")
+    em_model    = models.get("em")
+
+    prob_emas     = [None] * N_ZONES
+    smoother      = GestureSmoother(class_names)
+    em_smoother   = EmotionSmoother(em_model._class_names) if em_model else None
+    face_box      = None
+    parts_cache   = None
+    parts_counter = 0
+    det_countdown = 0
+
+    while not stop_event.is_set():
+        with shared["frame_lock"]:
+            frame = shared["frame"]
+            fg    = shared["fg"]
+        if frame is None:
+            time.sleep(0.005)
+            continue
+
+        h, w  = frame.shape[:2]
+        s     = h
+        x_off = [0, (w - s) // 2, w - s]
+        crops = [frame[:, x:x+s] for x in x_off]
+
+        # ── hand seg ──────────────────────────────────────────────────────────
+        sz = seg_model._img_size
+        tensors = [TF.normalize(TF.to_tensor(
+                       Image.fromarray(c[:, :, ::-1]).resize((sz, sz), Image.BILINEAR)),
+                       seg_model._mean, seg_model._std)
+                   for c in crops]
+        with torch.inference_mode():
+            logits = seg_model(torch.stack(tensors).to(device))
+        probs_list = torch.sigmoid(logits).squeeze(1).cpu().numpy().astype(np.float32)
+
+        zone_masks = []
+        for i, (prob, x) in enumerate(zip(probs_list, x_off)):
+            prob_rs = cv2.resize(prob, (s, s), interpolation=cv2.INTER_LINEAR)
+            m, prob_emas[i] = postprocess_hand_mask(prob_rs, prob_emas[i])
+            zone_masks.append((m, x))
+
+        if face_box is not None:
+            fx1, fy1, fx2, fy2 = face_box
+            for i, (m, x) in enumerate(zone_masks):
+                lx1 = max(0, fx1 - x); lx2 = max(0, fx2 - x)
+                if lx2 > lx1:
+                    m[fy1:fy2, lx1:lx2] = 0
+                zone_masks[i] = (m, x)
+
+        best_idx = max(range(N_ZONES), key=lambda i: np.count_nonzero(zone_masks[i][0]))
+        best_m   = zone_masks[best_idx][0]
+
+        hand_mask_full = np.zeros((h, w), dtype=np.uint8)
+        for m, x in zone_masks:
+            hand_mask_full[:, x:x+s] = np.maximum(hand_mask_full[:, x:x+s], m)
+
+        pres = hand_present(hand_mask_full)
+        if pres:
+            raw = run_gesture(crops[best_idx], best_m, gest_model, class_names)
+            smoother.add(raw["probs"])
+        else:
+            smoother.reset()
+        g = smoother.current()
+
+        # ── face (skipped if models not ready) ────────────────────────────────
+        skin_mask, region_masks, face_active, em = None, {}, False, {"emotion": "neutral", "confidence": 0.0}
+        if FACE_ENABLED:
+            det_countdown -= 1
+            if det_countdown <= 0:
+                det_countdown = FACE_DET_INTERVAL
+                faces    = run_face_det(frame, fd_model)
+                face_box = faces[0][0] if faces else None
+
+            if face_box is not None:
+                x1, y1, x2, y2 = face_box
+                pad_x = int((x2 - x1) * 0.20); pad_y = int((y2 - y1) * 0.25)
+                cx1 = max(0, x1 - pad_x); cy1 = max(0, y1 - pad_y)
+                cx2 = min(w, x2 + pad_x); cy2 = min(h, y2 + pad_y)
+                face_crop = frame[cy1:cy2, cx1:cx2]
+                if face_crop.size > 0:
+                    face_active   = True
+                    parts_counter += 1
+                    if parts_counter >= 2 or parts_cache is None:
+                        parts_counter = 0
+                        parts_map  = run_face_parts(face_crop, fp_model)
+                        skin_mask, region_masks = _face_mesh_data(parts_map, (cx1, cy1, cx2, cy2), h, w)
+                        dil       = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+                        skin_mask = cv2.dilate(skin_mask, dil, iterations=1)
+                        inv_hand  = cv2.bitwise_not(hand_mask_full)
+                        skin_mask = cv2.bitwise_and(skin_mask, inv_hand)
+                        region_masks = {k: cv2.bitwise_and(m, inv_hand) for k, m in region_masks.items()}
+                        parts_cache  = (skin_mask, region_masks)
+                    else:
+                        skin_mask, region_masks = parts_cache
+                    em_raw = run_emotion_batch([frame[y1:y2, x1:x2]], em_model)
+                    if em_raw:
+                        em_smoother.add(em_raw[0]["probs"])
+                else:
+                    em_smoother.reset()
+            else:
+                em_smoother.reset()
+            em = em_smoother.current()
+
+        with shared["result_lock"]:
+            shared["frame_disp"]   = frame
+            shared["hand_mask"]    = hand_mask_full
+            shared["pres"]         = pres
+            shared["g"]            = g
+            shared["skin_mask"]    = skin_mask
+            shared["region_masks"] = region_masks
+            shared["face_active"]  = face_active
+            shared["em"]           = em
+
+
+def main():
+    if not FACE_ENABLED:
+        print("[combined_app] Face checkpoints missing — running hand-only.")
+    models = load_all_models(face=FACE_ENABLED)
+
+    cap = cv2.VideoCapture(WEBCAM_INDEX)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  FRAME_W)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open webcam {WEBCAM_INDEX}")
+
+    shared = {
+        "frame_lock":  threading.Lock(),
+        "result_lock": threading.Lock(),
+        "frame": None, "fg": None,
+        "frame_disp": None, "hand_mask": None,
+        "pres": False, "g": None,
+        "skin_mask": None, "region_masks": {},
+        "face_active": False, "em": {"emotion": "neutral", "confidence": 0.0},
+    }
+    stop_event = threading.Event()
+    bg_sub = cv2.createBackgroundSubtractorMOG2(history=150, varThreshold=40,
+                                                 detectShadows=False)
+    for _ in range(30):
+        ret, frame = cap.read()
+        if ret:
+            bg_sub.apply(frame)
+
+    threading.Thread(target=_capture_loop,
+                     args=(cap, bg_sub, shared, stop_event), daemon=True).start()
+    threading.Thread(target=_inference_loop,
+                     args=(models, shared, stop_event), daemon=True).start()
+
+    os.environ['SDL_VIDEO_ALLOW_SCREENSAVER'] = '1'
+    pygame.init()
+    info = pygame.display.Info()
+    SCREEN_W, SCREEN_H = info.current_w, info.current_h
+    screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.FULLSCREEN | pygame.NOFRAME)
+    pygame.display.set_caption("LEARNIN_MACHINES")
+    print(f"[display] pygame fullscreen {SCREEN_W}x{SCREEN_H}")
+
+    fps       = 0.0
+    t_prev    = time.perf_counter()
+    mesh_fade = 0.0
+    face_fade = 0.0
+    hand_lpos = None
+    face_lpos = None
+    feedback_bufs: dict = {}
+    print("[live_app] Running. Press Esc to quit.")
+
+    while True:
+        # always render the latest frame at full camera fps
+        with shared["frame_lock"]:
+            frame = shared["frame"]
+        if frame is None:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT or \
+                   (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                    stop_event.set(); cap.release(); pygame.quit(); return
+            continue
+
+        with shared["result_lock"]:
+            hand_mask    = shared["hand_mask"]
+            pres         = shared["pres"]
+            g            = shared["g"]
+            skin_mask    = shared["skin_mask"]
+            region_masks = shared["region_masks"]
+            face_active  = shared["face_active"]
+            em           = shared["em"]
+
+        h, w = frame.shape[:2]
+        if hand_mask is None:
+            hand_mask = np.zeros((h, w), dtype=np.uint8)
+        if g is None:
+            g = {"gesture": None, "confidence": 0.0, "second": None,
+                 "second_conf": 0.0, "gesture_idx": 0}
+
+        mesh_fade = min(1.0, mesh_fade + 0.15) if pres        else max(0.0, mesh_fade - 0.025)
+        face_fade = min(1.0, face_fade + 0.20) if face_active else max(0.0, face_fade - 0.05)
+
+        t_now  = time.perf_counter()
+        fps    = 0.9 * fps + 0.1 / max(t_now - t_prev, 1e-6)
+        t_prev = t_now
+
+        rendered = frame.copy()
+
+        if mesh_fade > 0.01:
+            gidx  = g.get("gesture_idx", 0)
+            color = GESTURE_COLORS_BGR[gidx % len(GESTURE_COLORS_BGR)]
+            rendered = draw_mesh(rendered, hand_mask, color, mesh_fade, feedback_bufs, "hand")
+            if pres and g["gesture"] and g["confidence"] >= CONF_THRESHOLD:
+                raw_pos = label_anchor_raw(hand_mask, h, w)
+                if raw_pos:
+                    hand_lpos = raw_pos if hand_lpos is None else (
+                        hand_lpos[0] + LABEL_EMA * (raw_pos[0] - hand_lpos[0]),
+                        hand_lpos[1] + LABEL_EMA * (raw_pos[1] - hand_lpos[1]))
+                rendered = draw_label(rendered, hand_lpos, g["gesture"], color, g["confidence"])
+
+        if face_fade > 0.01 and skin_mask is not None and skin_mask.any():
+            eidx   = _EM_ORDER.index(em["emotion"]) if em.get("emotion") in _EM_ORDER else 2
+            fcolor = GESTURE_COLORS_BGR[_EM_TO_GIDX[eidx]]
+            rendered = draw_face_aura(rendered, skin_mask, face_fade)
+            rendered = draw_mesh(rendered, skin_mask, (255, 255, 255), face_fade * 0.38,
+                                 feedback_bufs, "face_skin", lines_only=True,
+                                 n_contour=20, n_interior=10, pts_update=0,
+                                 stable_interior=True, base_w_mult=1.2)
+            conf    = em.get("confidence", 0.0)
+            nc      = max(4, int(4 + conf * 36))
+            ni      = max(2, int(2 + conf * 18))
+            lm_fade = face_fade * (0.20 + conf * 0.45)
+            for rid, rmask in region_masks.items():
+                if rmask.any():
+                    rendered = draw_mesh(rendered, rmask, (255, 255, 255), lm_fade,
+                                         feedback_bufs, f"face_{rid}",
+                                         lines_only=True, n_contour=nc, n_interior=ni,
+                                         pts_update=0)
+            if em["confidence"] >= FACE_CONF_THR:
+                raw_pos = label_anchor_raw(skin_mask, h, w)
+                if raw_pos:
+                    face_lpos = raw_pos if face_lpos is None else (
+                        face_lpos[0] + LABEL_EMA * (raw_pos[0] - face_lpos[0]),
+                        face_lpos[1] + LABEL_EMA * (raw_pos[1] - face_lpos[1]))
+                rendered = draw_label(rendered, face_lpos, em["emotion"], fcolor, em["confidence"])
+
+        cv2.putText(rendered, f"{fps:.0f}", (w - 40, 22),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.42, (100, 100, 100), 1, cv2.LINE_AA)
+
+        rgb  = cv2.cvtColor(rendered, cv2.COLOR_BGR2RGB)
+        surf = pygame.surfarray.make_surface(rgb.transpose(1, 0, 2))
+        screen.blit(pygame.transform.scale(surf, (SCREEN_W, SCREEN_H)), (0, 0))
+        pygame.display.flip()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT or \
+               (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                stop_event.set(); cap.release(); pygame.quit(); return
+
+    stop_event.set()
+    cap.release()
+    pygame.quit()
+    print("[live_app] Stopped.")
+
+
+if __name__ == "__main__":
+    main()

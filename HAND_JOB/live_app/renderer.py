@@ -4,19 +4,22 @@ from scipy.spatial import Delaunay
 from live_app.config import CONF_THRESHOLD, GESTURE_COLORS_BGR
 
 FILL_OPACITY    = 0.55
-MESH_OPACITY    = 0.45
-GLOW_WIDTH      = 5
-CONTOUR_POINTS  = 20
-INTERIOR_POINTS = 8
+MESH_OPACITY    = 0.92
+GLOW_WIDTH      = 2
+CONTOUR_POINTS  = 10
+INTERIOR_POINTS = 3
 NETWORK_DIST    = 160
-NETWORK_MAX     = 30
+NETWORK_MAX     = 14
 BLOB_MIN_AREA   = 800
 
-MESH_BASE_W     = 2
-NET_BASE_W      = 2
-MAX_THICK_MULT  = 5.0
+MESH_BASE_W     = 1
+NET_BASE_W      = 1
+MAX_THICK_MULT  = 2.0
+MESH_PTS_UPDATE = 0
 
 _feedback_buf: np.ndarray | None = None
+_pts_cache: np.ndarray | None = None
+_pts_age: int = 0
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -77,11 +80,13 @@ def _bloom(canvas, color, mask, fade):
 
 def draw_mesh(frame: np.ndarray, mask: np.ndarray,
               confidence: float, gesture_idx: int, fade: float = 1.0) -> np.ndarray:
-    global _feedback_buf
+    global _feedback_buf, _pts_cache, _pts_age
     out      = frame.copy()
     eff_fade = fade * max(confidence, 0.15)
     if eff_fade < 0.01 or mask is None:
         _feedback_buf = None
+        _pts_cache    = None
+        _pts_age      = 0
         return out
 
     h, w  = frame.shape[:2]
@@ -106,8 +111,14 @@ def draw_mesh(frame: np.ndarray, mask: np.ndarray,
 
     contour_pts  = _sample_contour(mask, CONTOUR_POINTS)
     if contour_pts is not None and len(contour_pts) >= 3:
-        interior_pts = _interior_points(mask, INTERIOR_POINTS)
-        all_pts      = np.vstack([contour_pts, interior_pts]) if len(interior_pts) else contour_pts
+        if _pts_cache is None or _pts_age >= MESH_PTS_UPDATE:
+            interior_pts = _interior_points(mask, INTERIOR_POINTS)
+            all_pts      = np.vstack([contour_pts, interior_pts]) if len(interior_pts) else contour_pts
+            _pts_cache   = all_pts
+            _pts_age     = 0
+        else:
+            all_pts  = _pts_cache
+            _pts_age = _pts_age + 1
 
         try:
             tri        = Delaunay(all_pts)
@@ -156,7 +167,7 @@ def draw_mesh(frame: np.ndarray, mask: np.ndarray,
             c = tuple(min(255, int(255 * brightness)) for _ in range(3))
             p1, p2 = tuple(all_pts[i]), tuple(all_pts[j])
             cv2.line(net_layer, p1, p2, c, _edge_thickness(p1, p2, dist_map, NET_BASE_W))
-        cv2.addWeighted(net_layer, 0.30 * eff_fade, out, 1 - 0.30 * eff_fade, 0, out)
+        cv2.addWeighted(net_layer, 0.70 * eff_fade, out, 1 - 0.70 * eff_fade, 0, out)
 
         node_layer = out.copy()
         for pt in all_pts:
