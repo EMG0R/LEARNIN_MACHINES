@@ -1,0 +1,308 @@
+{
+  "by_mid": {
+    "/m/01g317": 1,
+    "/m/0k4j": 2,
+    "/m/0199g": 2,
+    "/m/04_sv": 2,
+    "/m/01bjv": 2,
+    "/m/07r04": 2,
+    "/m/06_fw": 3,
+    "/m/050k8": 4,
+    "/m/07c52": 5,
+    "/m/01c648": 5,
+    "/m/02522": 5,
+    "/m/0bh9flk": 5,
+    "/m/01m2v": 5,
+    "/m/0qjjc": 5,
+    "/m/015p6": 6,
+    "/m/0bt9lr": 6,
+    "/m/01yrx": 6,
+    "/m/07j7r": 7,
+    "/m/0c9ph5": 7,
+    "/m/05s2s": 7,
+    "/m/03fp41": 7,
+    "/m/07ptj3n": 8,
+    "/m/04dr76w": 8,
+    "/m/09tvcd": 8,
+    "/m/02jvh9": 8,
+    "/m/0dt3t": 9,
+    "/m/04ctx": 9,
+    "/m/0cmx8": 9,
+    "/m/04kkgm": 10,
+    "/m/050gv4": 10,
+    "/m/09j5n": 11,
+    "/m/01b638": 11,
+    "/m/03nfch": 11,
+    "/m/06k2mb": 11,
+    "/m/09kjlm": 11,
+    "/m/0jyfg": 12,
+    "/m/017ftj": 12,
+    "/m/01b7fy": 13,
+    "/m/01mzpv": 14,
+    "/m/02crq1": 15,
+    "/m/078n6m": 16,
+    "/m/0h8n5zk": 16,
+    "/m/01y9k5": 16,
+    "/m/0dtln": 17,
+    "/m/0bt_c3": 18,
+    "/m/01x3z": 19,
+    "/m/080hkjn": 20,
+    "/m/01940j": 20,
+    "/m/0342h": 21,
+    "/m/07gql": 22,
+    "/m/05r5c": 23
+  },
+  "by_class": {
+    "1": [
+      {
+        "name": "Person",
+        "mid": "/m/01g317"
+      }
+    ],
+    "2": [
+      {
+        "name": "Car",
+        "mid": "/m/0k4j"
+      },
+      {
+        "name": "Bicycle",
+        "mid": "/m/0199g"
+      },
+      {
+        "name": "Motorcycle",
+        "mid": "/m/04_sv"
+      },
+      {
+        "name": "Bus",
+        "mid": "/m/01bjv"
+      },
+      {
+        "name": "Truck",
+        "mid": "/m/07r04"
+      }
+    ],
+    "3": [
+      {
+        "name": "Skateboard",
+        "mid": "/m/06_fw"
+      }
+    ],
+    "4": [
+      {
+        "name": "Mobile phone",
+        "mid": "/m/050k8"
+      }
+    ],
+    "5": [
+      {
+        "name": "Television",
+        "mid": "/m/07c52"
+      },
+      {
+        "name": "Laptop",
+        "mid": "/m/01c648"
+      },
+      {
+        "name": "Computer monitor",
+        "mid": "/m/02522"
+      },
+      {
+        "name": "Tablet computer",
+        "mid": "/m/0bh9flk"
+      },
+      {
+        "name": "Computer keyboard",
+        "mid": "/m/01m2v"
+      },
+      {
+        "name": "Remote control",
+        "mid": "/m/0qjjc"
+      }
+    ],
+    "6": [
+      {
+        "name": "Bird",
+        "mid": "/m/015p6"
+      },
+      {
+        "name": "Dog",
+        "mid": "/m/0bt9lr"
+      },
+      {
+        "name": "Cat",
+        "mid": "/m/01yrx"
+      }
+    ],
+    "7": [
+      {
+        "name": "Tree",
+        "mid": "/m/07j7r"
+      },
+      {
+        "name": "Flower",
+        "mid": "/m/0c9ph5"
+      },
+      {
+        "name": "Plant",
+        "mid": "/m/05s2s"
+      },
+      {
+        "name": "Houseplant",
+        "mid": "/m/03fp41"
+      }
+    ],
+    "8": [
+      {
+        "name": "Cup",
+        "mid": "/m/07ptj3n"
+      },
+      {
+        "name": "Bottle",
+        "mid": "/m/04dr76w"
+      },
+      {
+        "name": "Wine glass",
+        "mid": "/m/09tvcd"
+      },
+      {
+        "name": "Mug",
+        "mid": "/m/02jvh9"
+      }
+    ],
+    "9": [
+      {
+        "name": "Fork",
+        "mid": "/m/0dt3t"
+      },
+      {
+        "name": "Knife",
+        "mid": "/m/04ctx"
+      },
+      {
+        "name": "Spoon",
+        "mid": "/m/0cmx8"
+      }
+    ],
+    "10": [
+      {
+        "name": "Bowl",
+        "mid": "/m/04kkgm"
+      },
+      {
+        "name": "Plate",
+        "mid": "/m/050gv4"
+      }
+    ],
+    "11": [
+      {
+        "name": "Footwear",
+        "mid": "/m/09j5n"
+      },
+      {
+        "name": "Boot",
+        "mid": "/m/01b638"
+      },
+      {
+        "name": "Sandal",
+        "mid": "/m/03nfch"
+      },
+      {
+        "name": "High heels",
+        "mid": "/m/06k2mb"
+      },
+      {
+        "name": "Sneakers",
+        "mid": "/m/09kjlm"
+      }
+    ],
+    "12": [
+      {
+        "name": "Glasses",
+        "mid": "/m/0jyfg"
+      },
+      {
+        "name": "Sunglasses",
+        "mid": "/m/017ftj"
+      }
+    ],
+    "13": [
+      {
+        "name": "Headphones",
+        "mid": "/m/01b7fy"
+      }
+    ],
+    "14": [
+      {
+        "name": "Chair",
+        "mid": "/m/01mzpv"
+      }
+    ],
+    "15": [
+      {
+        "name": "Couch",
+        "mid": "/m/02crq1"
+      }
+    ],
+    "16": [
+      {
+        "name": "Coffee table",
+        "mid": "/m/078n6m"
+      },
+      {
+        "name": "Kitchen & dining room table",
+        "mid": "/m/0h8n5zk"
+      },
+      {
+        "name": "Desk",
+        "mid": "/m/01y9k5"
+      }
+    ],
+    "17": [
+      {
+        "name": "Lamp",
+        "mid": "/m/0dtln"
+      }
+    ],
+    "18": [
+      {
+        "name": "Book",
+        "mid": "/m/0bt_c3"
+      }
+    ],
+    "19": [
+      {
+        "name": "Clock",
+        "mid": "/m/01x3z"
+      }
+    ],
+    "20": [
+      {
+        "name": "Handbag",
+        "mid": "/m/080hkjn"
+      },
+      {
+        "name": "Backpack",
+        "mid": "/m/01940j"
+      }
+    ],
+    "21": [
+      {
+        "name": "Guitar",
+        "mid": "/m/0342h"
+      }
+    ],
+    "22": [
+      {
+        "name": "Trumpet",
+        "mid": "/m/07gql"
+      }
+    ],
+    "23": [
+      {
+        "name": "Piano",
+        "mid": "/m/05r5c"
+      }
+    ]
+  },
+  "missing": []
+}

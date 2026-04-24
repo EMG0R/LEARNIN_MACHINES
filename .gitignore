@@ -34,6 +34,9 @@ __pycache__/
 *.json
 *.lst
 
+# objectification tracked artifacts
+!OBJECTIFICATION/seg/class_map.json
+
 # specific dirs
 FACE_JOB/data/
 FACE_JOB/logs/
