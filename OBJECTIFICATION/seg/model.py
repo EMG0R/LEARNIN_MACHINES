@@ -65,3 +65,35 @@ class SPPF(nn.Module):
         y2 = self.m(y1)
         y3 = self.m(y2)
         return self.cv2(torch.cat([x, y1, y2, y3], dim=1))
+
+
+class Backbone(nn.Module):
+    """CSPDarknet-lite. Stem + 4 stages. Returns 4 feature pyramid levels.
+
+    Input:  (B, 3, 320, 320)
+    Output: (P2, P3, P4, P5) at strides 4, 8, 16, 32 with channels 64,128,256,512.
+    """
+    def __init__(self):
+        super().__init__()
+        self.stem = conv_bn_act(3, 32, k=3, s=2)        # 320 -> 160
+
+        self.s1_down = conv_bn_act(32,  64,  k=3, s=2)  # 160 -> 80
+        self.s1_c3   = C3(64,  64,  n=1)
+
+        self.s2_down = conv_bn_act(64,  128, k=3, s=2)  # 80 -> 40
+        self.s2_c3   = C3(128, 128, n=2)
+
+        self.s3_down = conv_bn_act(128, 256, k=3, s=2)  # 40 -> 20
+        self.s3_c3   = C3(256, 256, n=3)
+
+        self.s4_down = conv_bn_act(256, 512, k=3, s=2)  # 20 -> 10
+        self.s4_c3   = C3(512, 512, n=1)
+        self.s4_sppf = SPPF(512, 512, k=5)
+
+    def forward(self, x):
+        x = self.stem(x)
+        p2 = self.s1_c3(self.s1_down(x))            # 80x80
+        p3 = self.s2_c3(self.s2_down(p2))           # 40x40
+        p4 = self.s3_c3(self.s3_down(p3))           # 20x20
+        p5 = self.s4_sppf(self.s4_c3(self.s4_down(p4)))  # 10x10
+        return p2, p3, p4, p5
