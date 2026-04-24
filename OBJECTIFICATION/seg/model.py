@@ -46,3 +46,22 @@ class C3(nn.Module):
         a = self.m(self.cv1(x))
         b = self.cv2(x)
         return self.cv3(torch.cat([a, b], dim=1))
+
+
+class SPPF(nn.Module):
+    """Spatial Pyramid Pooling - Fast (YOLOv5/v8). Three series 5x5
+    maxpools form a multi-scale receptive field, concatenated and fused.
+    """
+    def __init__(self, ci, co, k=5):
+        super().__init__()
+        c_h = ci // 2
+        self.cv1 = conv_bn_act(ci, c_h, k=1)
+        self.cv2 = conv_bn_act(c_h * 4, co, k=1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+
+    def forward(self, x):
+        x = self.cv1(x)
+        y1 = self.m(x)
+        y2 = self.m(y1)
+        y3 = self.m(y2)
+        return self.cv2(torch.cat([x, y1, y2, y3], dim=1))
