@@ -123,3 +123,43 @@ class Neck(nn.Module):
         n3 = self.fuse3(torch.cat([self._up(self.lat3(n4)), p3], dim=1))   # 40x40, 128
         n2 = self.fuse2(torch.cat([self._up(self.lat2(n3)), p2], dim=1))   # 80x80,  64
         return n2, n3, n4
+
+
+class SegHead(nn.Module):
+    """Final segmentation head. Takes N2 (stride 4) and upsamples 4x to
+    full resolution, then 1x1 to num_classes channels.
+    """
+    def __init__(self, ci, num_classes):
+        super().__init__()
+        self.fuse = conv_bn_act(ci, 32, k=3)
+        self.out  = nn.Conv2d(32, num_classes, kernel_size=1)
+
+    def forward(self, x):
+        x = F.interpolate(x, scale_factor=4, mode="bilinear", align_corners=False)
+        x = self.fuse(x)
+        return self.out(x)
+
+
+class ObjSegNet(nn.Module):
+    """Full model: backbone -> neck -> seg head. Returns logits (B, K, H, W)."""
+    def __init__(self, num_classes=24):
+        super().__init__()
+        self.backbone = Backbone()
+        self.neck = Neck()
+        self.head = SegHead(64, num_classes)
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        p2, p3, p4, p5 = self.backbone(x)
+        n2, _, _ = self.neck(p2, p3, p4, p5)
+        return self.head(n2)

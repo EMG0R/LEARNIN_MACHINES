@@ -44,3 +44,23 @@ def test_neck_top_down_fusion():
     assert n4.shape == (1, 256, 20, 20)
     assert n3.shape == (1, 128, 40, 40)
     assert n2.shape == (1,  64, 80, 80)
+
+from OBJECTIFICATION.seg.model import ObjSegNet
+
+def test_full_model_output_shape():
+    model = ObjSegNet(num_classes=24)
+    x = torch.randn(2, 3, 320, 320)
+    y = model(x)
+    assert y.shape == (2, 24, 320, 320)
+
+def test_param_count_in_range():
+    model = ObjSegNet(num_classes=24)
+    n = sum(p.numel() for p in model.parameters())
+    assert 3_000_000 <= n <= 7_000_000, f"unexpected param count {n:,}"
+
+def test_forward_no_nan():
+    torch.manual_seed(0)
+    model = ObjSegNet(num_classes=24)
+    x = torch.randn(1, 3, 320, 320)
+    y = model(x)
+    assert torch.isfinite(y).all()
