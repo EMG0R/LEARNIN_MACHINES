@@ -24,7 +24,7 @@ def test_tick_changes_buffer():
     ff = FlowField(480, 640)
     before = ff.buffer.copy()
     ff.tick()
-    # after first tick the buffer should have non-zero content
+    assert not np.array_equal(ff.buffer, before)
     assert ff.buffer.sum() > 0
 
 

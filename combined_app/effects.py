@@ -23,7 +23,7 @@ class FlowField:
         self.yn = (yy / height).astype(np.float32)
 
     def tick(self) -> None:
-        """Advance one frame. Updates self.buffer in place."""
+        """Advance one frame. Replaces self.buffer with new content."""
         t = self.t
         f1 = np.sin(self.xn * 4.0 + t) * np.cos(self.yn * 3.0 + t * 0.7)
         f2 = np.sin(self.xn * 2.5 + t * 0.5) * np.cos(self.yn * 5.0 + t * 1.3)
