@@ -173,7 +173,8 @@ LEARNIN_MACHINES/
 │   ├── objectification_model.py  # OBJECTIFICATION wrapper
 │   ├── effects.py             # ambient numpy flow-field
 │   ├── tone.py                # mirror LUT + color grade
-│   └── renderer.py            # all cv2 drawing
+│   ├── renderer.py            # all cv2 drawing
+│   └── tests/                 # unit tests for new modules
 ├── archetecture.md
 └── docs/superpowers/
     ├── specs/
@@ -198,11 +199,11 @@ No app restructure needed.
 
 ## Training Time Estimates
 
-| Model | Dataset | MPS estimate |
+| Model | Dataset | Status |
 |---|---|---|
-| OBJECTIFICATION | OI V7 ~40–80K | 6–10h |
-| Face Detector | WIDER FACE ~20K | 4–6h |
-| Face-Part U-Net | CelebAMask-HQ 30K | 2–3h |
-| Emotion CNN | FER+∪RAF-DB∪ExpW ~140K | 2–4h |
+| OBJECTIFICATION | OI V7 ~40–80K | implemented, training pending |
+| Face Detector ✓ | WIDER FACE ~20K | trained |
+| Face-Part U-Net ✓ | CelebAMask-HQ 30K | trained |
+| Emotion CNN ✓ | FER+∪RAF-DB∪ExpW ~140K | trained |
 | Hand Seg ✓ | FreiHAND 130K | trained |
 | Gesture ✓ | HaGRID 30K | trained |
