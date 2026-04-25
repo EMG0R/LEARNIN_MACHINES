@@ -53,6 +53,13 @@ N_ZONES           = 3
 LABEL_EMA         = 0.18
 _EM_ORDER   = ["happy", "sad", "neutral", "surprise", "anger", "fear", "disgust"]
 _EM_TO_GIDX = [0, 3, 6, 9, 12, 15, 2]
+_OBJ_COLORS = {
+    "vehicle": (0, 180, 255), "animal": (0, 255, 180),
+    "plant": (0, 200, 80), "device": (255, 200, 0),
+    "phone": (255, 200, 0), "chair": (120, 80, 200),
+    "couch": (120, 80, 200), "guitar": (0, 100, 255),
+    "piano": (0, 100, 255), "trumpet": (0, 100, 255),
+}
 
 FACE_ENABLED = all(Path(p).exists() for p in [FACE_DET_CKPT, FACE_PARTS_CKPT, EMOTION_CKPT])
 
@@ -305,22 +312,20 @@ def main():
 
         # ── OBJECTIFICATION overlays ─────────────────────────────────────────
         if obj_result and obj_result["enabled"]:
-            _OBJ_COLORS = {
-                "vehicle": (0, 180, 255), "animal": (0, 255, 180),
-                "plant": (0, 200, 80), "device": (255, 200, 0),
-                "phone": (255, 200, 0), "chair": (120, 80, 200),
-                "couch": (120, 80, 200), "guitar": (0, 100, 255),
-                "piano": (0, 100, 255), "trumpet": (0, 100, 255),
-            }
+            fills = []  # (contours, color)
             for cls_name, mask in obj_result["class_map"].items():
                 if cls_name == "person":
                     continue
                 color = _OBJ_COLORS.get(cls_name, (160, 160, 160))
                 contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 if contours:
-                    overlay = rendered.copy()
+                    fills.append((contours, color))
+            if fills:
+                overlay = rendered.copy()
+                for contours, color in fills:
                     cv2.drawContours(overlay, contours, -1, color, -1)
-                    rendered = cv2.addWeighted(rendered, 0.85, overlay, 0.15, 0)
+                rendered = cv2.addWeighted(rendered, 0.85, overlay, 0.15, 0)
+                for contours, color in fills:
                     cv2.drawContours(rendered, contours, -1, color, 1)
 
         if mesh_fade > 0.01:
