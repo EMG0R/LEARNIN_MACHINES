@@ -31,6 +31,8 @@ from combined_app.config import (
     FACE_CLASS_SKIN, FACE_CLASS_EYE_L, FACE_CLASS_EYE_R, FACE_CLASS_MOUTH,
     GESTURE_COLORS_BGR,
     FACE_DET_CKPT, FACE_PARTS_CKPT, EMOTION_CKPT,
+    MIRROR_FLIP, TONE_GAMMA, TONE_SAT_FACTOR, EFFECTS_OPACITY, EFFECTS_STEP,
+    OBJECTIFICATION_ENABLED,
 )
 from combined_app.models import (
     load_all_models, device,
@@ -38,7 +40,13 @@ from combined_app.models import (
     run_gesture, GestureSmoother,
     run_face_det, run_face_parts, run_emotion_batch, EmotionSmoother,
 )
-from combined_app.renderer import draw_mesh, draw_label, draw_face_aura, label_anchor_raw
+from combined_app.renderer import (
+    draw_mesh, draw_label, draw_face_aura, label_anchor_raw,
+    draw_clock, draw_label_strip,
+)
+from combined_app.effects import FlowField
+from combined_app.tone import build_lut, apply_grade
+from combined_app.objectification_model import load_objectification, run_objectification
 
 FACE_DET_INTERVAL = 8
 N_ZONES           = 3
@@ -68,15 +76,13 @@ def _face_mesh_data(parts_map, box, fh, fw):
     }
 
 
-def _capture_loop(cap, bg_sub, shared, stop_event):
+def _capture_loop(cap, shared, stop_event):
     while not stop_event.is_set():
         ret, frame = cap.read()
         if not ret:
             continue
-        fg = bg_sub.apply(frame)
         with shared["frame_lock"]:
             shared["frame"] = frame
-            shared["fg"]    = fg
 
 
 def _inference_loop(models, shared, stop_event):
@@ -86,6 +92,7 @@ def _inference_loop(models, shared, stop_event):
     fd_model    = models.get("fd")
     fp_model    = models.get("fp")
     em_model    = models.get("em")
+    obj_model   = models.get("obj")
 
     prob_emas     = [None] * N_ZONES
     smoother      = GestureSmoother(class_names)
@@ -98,12 +105,15 @@ def _inference_loop(models, shared, stop_event):
     while not stop_event.is_set():
         with shared["frame_lock"]:
             frame = shared["frame"]
-            fg    = shared["fg"]
         if frame is None:
             time.sleep(0.005)
             continue
 
         h, w  = frame.shape[:2]
+
+        # ── OBJECTIFICATION (Layer 1) ─────────────────────────────────────────
+        obj_result = run_objectification(frame, obj_model)
+
         s     = h
         x_off = [0, (w - s) // 2, w - s]
         crops = [frame[:, x:x+s] for x in x_off]
@@ -195,12 +205,15 @@ def _inference_loop(models, shared, stop_event):
             shared["region_masks"] = region_masks
             shared["face_active"]  = face_active
             shared["em"]           = em
+            shared["obj_result"]   = obj_result
 
 
 def main():
     if not FACE_ENABLED:
         print("[combined_app] Face checkpoints missing — running hand-only.")
     models = load_all_models(face=FACE_ENABLED)
+    obj_model = load_objectification() if OBJECTIFICATION_ENABLED else None
+    models["obj"] = obj_model
 
     cap = cv2.VideoCapture(WEBCAM_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  FRAME_W)
@@ -211,22 +224,17 @@ def main():
     shared = {
         "frame_lock":  threading.Lock(),
         "result_lock": threading.Lock(),
-        "frame": None, "fg": None,
+        "frame": None,
         "frame_disp": None, "hand_mask": None,
         "pres": False, "g": None,
         "skin_mask": None, "region_masks": {},
         "face_active": False, "em": {"emotion": "neutral", "confidence": 0.0},
+        "obj_result": None,
     }
     stop_event = threading.Event()
-    bg_sub = cv2.createBackgroundSubtractorMOG2(history=150, varThreshold=40,
-                                                 detectShadows=False)
-    for _ in range(30):
-        ret, frame = cap.read()
-        if ret:
-            bg_sub.apply(frame)
 
     threading.Thread(target=_capture_loop,
-                     args=(cap, bg_sub, shared, stop_event), daemon=True).start()
+                     args=(cap, shared, stop_event), daemon=True).start()
     threading.Thread(target=_inference_loop,
                      args=(models, shared, stop_event), daemon=True).start()
 
@@ -237,6 +245,11 @@ def main():
     screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.FULLSCREEN | pygame.NOFRAME)
     pygame.display.set_caption("LEARNIN_MACHINES")
     print(f"[display] pygame fullscreen {SCREEN_W}x{SCREEN_H}")
+
+    flow = FlowField(SCREEN_H, SCREEN_W, opacity=EFFECTS_OPACITY, step=EFFECTS_STEP)
+    lut  = build_lut(gamma=TONE_GAMMA)
+    flow.tick()  # pre-warm buffer so first frame isn't black
+    show_fps = False
 
     fps       = 0.0
     t_prev    = time.perf_counter()
@@ -253,8 +266,9 @@ def main():
             frame = shared["frame"]
         if frame is None:
             for event in pygame.event.get():
-                if event.type == pygame.QUIT or \
-                   (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                if event.type == pygame.QUIT:
+                    stop_event.set(); cap.release(); pygame.quit(); return
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     stop_event.set(); cap.release(); pygame.quit(); return
             continue
 
@@ -266,6 +280,7 @@ def main():
             region_masks = shared["region_masks"]
             face_active  = shared["face_active"]
             em           = shared["em"]
+            obj_result   = shared["obj_result"]
 
         h, w = frame.shape[:2]
         if hand_mask is None:
@@ -281,7 +296,32 @@ def main():
         fps    = 0.9 * fps + 0.1 / max(t_now - t_prev, 1e-6)
         t_prev = t_now
 
-        rendered = frame.copy()
+        # Mirror pipeline: flip → grade → effects → overlays → HUD
+        if MIRROR_FLIP:
+            frame = cv2.flip(frame, 1)
+        rendered = apply_grade(frame, lut, sat_factor=TONE_SAT_FACTOR)
+        flow.tick()
+        rendered = flow.blend_onto(rendered)
+
+        # ── OBJECTIFICATION overlays ─────────────────────────────────────────
+        if obj_result and obj_result["enabled"]:
+            _OBJ_COLORS = {
+                "vehicle": (0, 180, 255), "animal": (0, 255, 180),
+                "plant": (0, 200, 80), "device": (255, 200, 0),
+                "phone": (255, 200, 0), "chair": (120, 80, 200),
+                "couch": (120, 80, 200), "guitar": (0, 100, 255),
+                "piano": (0, 100, 255), "trumpet": (0, 100, 255),
+            }
+            for cls_name, mask in obj_result["class_map"].items():
+                if cls_name == "person":
+                    continue
+                color = _OBJ_COLORS.get(cls_name, (160, 160, 160))
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if contours:
+                    overlay = rendered.copy()
+                    cv2.drawContours(overlay, contours, -1, color, -1)
+                    rendered = cv2.addWeighted(rendered, 0.85, overlay, 0.15, 0)
+                    cv2.drawContours(rendered, contours, -1, color, 1)
 
         if mesh_fade > 0.01:
             gidx  = g.get("gesture_idx", 0)
@@ -321,8 +361,20 @@ def main():
                         face_lpos[1] + LABEL_EMA * (raw_pos[1] - face_lpos[1]))
                 rendered = draw_label(rendered, face_lpos, em["emotion"], fcolor, em["confidence"])
 
-        cv2.putText(rendered, f"{fps:.0f}", (w - 40, 22),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.42, (100, 100, 100), 1, cv2.LINE_AA)
+        # ── HUD ──────────────────────────────────────────────────────────────
+        draw_clock(rendered)
+        active_objs = []
+        if obj_result and obj_result["enabled"]:
+            active_objs = [c for c in obj_result["active_classes"] if c != "person"]
+        hud_labels = {
+            "objects": active_objs,
+            "gesture": g["gesture"] if pres and g["confidence"] >= CONF_THRESHOLD else None,
+            "emotion": em["emotion"] if face_active and em["confidence"] >= FACE_CONF_THR else None,
+        }
+        draw_label_strip(rendered, hud_labels)
+        if show_fps:
+            cv2.putText(rendered, f"fps:{fps:.0f}", (10, 25),
+                        cv2.FONT_HERSHEY_PLAIN, 0.9, (80, 255, 80), 1, cv2.LINE_AA)
 
         rgb  = cv2.cvtColor(rendered, cv2.COLOR_BGR2RGB)
         surf = pygame.surfarray.make_surface(rgb.transpose(1, 0, 2))
@@ -330,9 +382,13 @@ def main():
         pygame.display.flip()
 
         for event in pygame.event.get():
-            if event.type == pygame.QUIT or \
-               (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+            if event.type == pygame.QUIT:
                 stop_event.set(); cap.release(); pygame.quit(); return
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    stop_event.set(); cap.release(); pygame.quit(); return
+                if event.key == pygame.K_f:
+                    show_fps = not show_fps
 
     stop_event.set()
     cap.release()
