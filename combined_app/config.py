@@ -69,3 +69,21 @@ FACE_CLASS_EYE_L      = 1
 FACE_CLASS_EYE_R      = 2
 FACE_CLASS_MOUTH      = 3
 FACE_CLASS_SKIN       = 4
+
+# ── OBJECTIFICATION (Layer 1) ─────────────────────────────────────────────────
+from pathlib import Path as _Path
+_OBJ = REPO / "OBJECTIFICATION/seg/checkpoints"
+OBJ_CKPT = _OBJ / "best.pt" if (_OBJ / "best.pt").exists() else _OBJ / "obj_seg_integration.pt"
+OBJ_SIZE = 320
+PERSON_MIN_AREA = 0.05   # fraction of frame for cascade gate
+OBJ_CONF_THRESHOLD = 0.5
+OBJECTIFICATION_ENABLED = OBJ_CKPT.exists()
+
+# ── Mirror display ────────────────────────────────────────────────────────────
+MIRROR_FLIP = True         # horizontal flip for mirror effect
+TONE_GAMMA = 1.1           # >1 brightens midtones
+TONE_SAT_FACTOR = 0.90     # 0.9 = 10% desaturation
+
+# ── Ambient effects ───────────────────────────────────────────────────────────
+EFFECTS_OPACITY = 0.25     # additive blend weight of flow-field layer
+EFFECTS_STEP = 0.005       # time step per frame (slow drift)
