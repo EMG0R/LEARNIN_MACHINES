@@ -316,3 +316,38 @@ def draw_blobs(frame: np.ndarray, fg_mask: np.ndarray,
         except Exception:
             pass
     return out
+
+
+# ── HUD ───────────────────────────────────────────────────────────────────────
+
+def draw_clock(frame: np.ndarray) -> None:
+    """Draw current time top-right corner. Modifies frame in place."""
+    from datetime import datetime
+    text = datetime.now().strftime("%H:%M:%S")
+    (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_PLAIN, 0.65, 1)
+    x = frame.shape[1] - tw - 10
+    cv2.putText(frame, text, (x, 28), cv2.FONT_HERSHEY_PLAIN, 0.65,
+                (190, 190, 190), 1, cv2.LINE_AA)
+
+
+def draw_label_strip(frame: np.ndarray, labels: dict) -> None:
+    """Draw bottom-of-frame label strip. Modifies frame in place.
+
+    labels keys (all optional): 'objects' (list[str]), 'gesture' (str), 'emotion' (str)
+    """
+    parts = []
+    objs = labels.get("objects")
+    if objs:
+        parts.append("  ".join(objs[:4]))
+    gesture = labels.get("gesture")
+    if gesture:
+        parts.append(f"gesture:{gesture}")
+    emotion = labels.get("emotion")
+    if emotion:
+        parts.append(f"emotion:{emotion}")
+    if not parts:
+        return
+    text = "   |   ".join(parts)
+    h = frame.shape[0]
+    cv2.putText(frame, text, (10, h - 12), cv2.FONT_HERSHEY_PLAIN, 0.42,
+                (160, 160, 160), 1, cv2.LINE_AA)
