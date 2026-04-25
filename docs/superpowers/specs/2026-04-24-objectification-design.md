@@ -12,7 +12,7 @@
 
 Replace the planned Mask R-CNN Layer 1 with a **23-class semantic segmentation U-Net** trained from scratch on a curated subset of OpenImages V7. Output is a per-pixel class map; the renderer extracts contours per class for the mesh-overlay aesthetic shared with `hand_seg` and `face_parts`. No bounding boxes are drawn — the contour mesh *is* the visual.
 
-The cascade gating contract is preserved: when `person` pixels are present, the downstream face/hand/pose branches still fire; OSC sends per-class contour data on a new `/obj/*` namespace.
+The cascade gating contract is preserved: when `person` pixels are present, the downstream face/hand/pose branches still fire; per-class contour data passes to the renderer.
 
 ---
 
