@@ -2,7 +2,7 @@
 
 **Status:** design
 **Date:** 2026-04-24
-**Replaces:** original Layer 1 (Mask R-CNN, 80 COCO classes, by Jake) in `archetecture.md`
+**Replaces:** original Layer 1 (Mask R-CNN, 80 COCO classes) in `archetecture.md`
 **Folder:** `OBJECTIFICATION/`
 **Target platforms:** Mac (Apple MPS) for v1; Pi 5 + Hailo AI HAT+ for v2 (deferred)
 
@@ -304,7 +304,7 @@ Pi 5 LPDDR4X-4267 ~17 GB/s vs Mac M-series ~100+ GB/s. The 320×320×24 float ma
 
 ### 9.7 Combined-app orchestration
 
-The eventual `combined_app/` (per `archetecture.md` §Combined Live App) will need a Pi-aware scheduler:
+The eventual `combined_app/` (per `archetecture.md` §Pi Migration Path) will need a Pi-aware scheduler:
 
 - Async Hailo job queue with priority (L1 always; L2/L3 conditional on gates)
 - Frame-level pipelining across stages
