@@ -234,26 +234,10 @@ OBJECTIFICATION becomes the new Layer 1 in the cascade. Output flow per frame:
    - `cv2.connectedComponents` → per-blob masks
    - `cv2.findContours` per blob → polygon vertices
    - Compute centroid, area, bbox per blob
-4. Send per-blob OSC on `/obj/*` namespace.
+4. Pass per-blob data to the renderer via the result dict.
 5. If `Person` class has any blob with area ≥ `PERSON_MIN_AREA`, signal downstream face/hand/pose branches with the person crop region (preserves cascade gating contract from `archetecture.md`).
 
-### 7.1 OSC schema — new `/obj/*` namespace
-
-All values normalized to frame dimensions [0, 1] unless noted.
-
-```
-/obj/present                       int      total non-bg blobs across all classes
-/obj/fps                           float    L1 inference fps
-/obj/{class}/count                 int      number of blobs of this class
-/obj/{class}/{i}/centroid          float×2  x y
-/obj/{class}/{i}/area              float    fraction of frame
-/obj/{class}/{i}/bbox              float×4  x y w h
-/obj/{class}/{i}/contour           float[]  x1 y1 x2 y2 ... vertices
-```
-
-`{class}` is the lowercased class name from §2 (e.g., `person`, `vehicle`, `plant`). When a class has no blobs, no messages send for it (saves bandwidth).
-
-### 7.2 Renderer
+### 7.1 Renderer
 
 Per-class color palette baked from `class_map.json`. Each blob's contour is drawn at 1–2px stroke with class color; optional 15% fill. Identical aesthetic philosophy to the hand mesh in `archetecture.md` §Overlays — the contour *is* the visual, no bounding boxes drawn.
 
@@ -310,8 +294,8 @@ From-scratch random-init models may lose mIoU when compiled to Hailo INT8. Mitig
 
 `cv2.findContours` × 24 classes per frame on Pi 5 ARM: estimated 10–20 ms by itself. Mitigations:
 
-- Skip classes with no pixels (already in §7.1)
-- Decimate contour vertices (Douglas-Peucker, ε=2px) before sending — also reduces OSC payload
+- Skip classes with no pixels (already in §7)
+- Decimate contour vertices (Douglas-Peucker, ε=2px) before sending — also reduces bandwidth
 - Move connected-component pass to a thread pool
 
 ### 9.6 Memory bandwidth
