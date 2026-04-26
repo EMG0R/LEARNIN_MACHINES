@@ -18,6 +18,7 @@ import argparse
 import csv
 import json
 import sys
+import time
 import urllib.request
 import zipfile
 from collections import defaultdict
@@ -52,12 +53,18 @@ def download_file(url: str, dest: Path):
     if dest.exists():
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        urllib.request.urlretrieve(url, dest)
-    except Exception as e:
-        print(f"  FAIL {url}: {e}", file=sys.stderr)
-        if dest.exists():
-            dest.unlink()
+    last_err = None
+    for attempt in range(4):
+        try:
+            urllib.request.urlretrieve(url, dest)
+            return
+        except Exception as e:
+            last_err = e
+            if dest.exists():
+                dest.unlink()
+            if attempt < 3:
+                time.sleep(1.5 * (2 ** attempt))  # 1.5s, 3s, 6s
+    print(f"  FAIL {url}: {last_err}", file=sys.stderr)
 
 
 def load_class_map():
