@@ -1,8 +1,9 @@
 """Paired image+mask transforms for semantic segmentation training.
 
-Light, validated stack only — no MixUp / CutMix / RandAugment / EMA / AMP.
-Per feedback_hagrid_v3_overengineering.md, stacking these on MPS collapses
-training. HFlip + color jitter + small rotation + scale-and-crop only.
+v4: stronger augmentation aligned with YOLOv5/v8 defaults — wider scale
+range (0.5-1.5), HSV-based color jitter (instead of RGB-based), larger
+rotation. Still avoids the v3-overengineering trap (no MixUp, CutMix,
+RandAugment, EMA, AMP — those collapsed gesture training on MPS).
 """
 import random
 
@@ -14,6 +15,22 @@ from PIL import Image
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 IGNORE_INDEX  = 255  # used for padding regions when mask doesn't fill the crop
+
+
+def _hsv_jitter(image: Image.Image, h_jitter=0.015, s_jitter=0.7, v_jitter=0.4):
+    """YOLOv5-style HSV jitter. h/s/v perturbations applied multiplicatively
+    in HSV space — more domain-realistic than independent RGB channel jitter.
+    Defaults match YOLOv5 (h=0.015, s=0.7, v=0.4).
+    """
+    arr = np.asarray(image.convert("HSV"), dtype=np.int16)
+    rh = random.uniform(-h_jitter, h_jitter) * 180
+    rs = random.uniform(1 - s_jitter, 1 + s_jitter)
+    rv = random.uniform(1 - v_jitter, 1 + v_jitter)
+
+    arr[..., 0] = (arr[..., 0] + int(rh)) % 180
+    arr[..., 1] = np.clip(arr[..., 1] * rs, 0, 255)
+    arr[..., 2] = np.clip(arr[..., 2] * rv, 0, 255)
+    return Image.fromarray(arr.astype(np.uint8), mode="HSV").convert("RGB")
 
 
 class SegTransform:
@@ -28,13 +45,10 @@ class SegTransform:
             if random.random() < 0.5:
                 image = TF.hflip(image)
                 mask = TF.hflip(mask)
-            angle = random.uniform(-10, 10)
+            angle = random.uniform(-15, 15)
             image = TF.rotate(image, angle, interpolation=TF.InterpolationMode.BILINEAR, fill=0)
             mask = TF.rotate(mask, angle, interpolation=TF.InterpolationMode.NEAREST, fill=IGNORE_INDEX)
-            image = TF.adjust_brightness(image, random.uniform(0.8, 1.2))
-            image = TF.adjust_contrast(image,   random.uniform(0.8, 1.2))
-            image = TF.adjust_saturation(image, random.uniform(0.8, 1.2))
-            image = TF.adjust_hue(image,        random.uniform(-0.05, 0.05))
+            image = _hsv_jitter(image)
         else:
             image = TF.resize(image, [self.img_size, self.img_size], interpolation=TF.InterpolationMode.BILINEAR)
             mask  = TF.resize(mask,  [self.img_size, self.img_size], interpolation=TF.InterpolationMode.NEAREST)
@@ -45,10 +59,13 @@ class SegTransform:
         return x, y
 
     def _random_scale_crop(self, image, mask):
-        """Random scale 0.8x..1.2x then random crop to img_size."""
-        s = random.uniform(0.8, 1.2)
+        """Random scale 0.5x..1.5x then random crop to img_size.
+        Wider range than v1-v3 (0.8-1.2) — exposes model to more sizes
+        per epoch, helps with size invariance and small-object recall.
+        """
+        s = random.uniform(0.5, 1.5)
         W, H = image.size
-        new_W, new_H = int(W * s), int(H * s)
+        new_W, new_H = max(1, int(W * s)), max(1, int(H * s))
         image = TF.resize(image, [new_H, new_W], interpolation=TF.InterpolationMode.BILINEAR)
         mask  = TF.resize(mask,  [new_H, new_W], interpolation=TF.InterpolationMode.NEAREST)
 

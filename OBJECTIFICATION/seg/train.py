@@ -24,7 +24,7 @@ from OBJECTIFICATION.seg.augment import SegTransform
 from OBJECTIFICATION.seg.classes import CLASS_NAMES, NUM_CLASSES
 from OBJECTIFICATION.seg.dataset import OpenImagesSegDataset
 from OBJECTIFICATION.seg.eval import ConfusionAccumulator, macro_miou, per_class_iou
-from OBJECTIFICATION.seg.losses import ce_dice_loss
+from OBJECTIFICATION.seg.losses import ce_dice_loss, focal_dice_loss
 from OBJECTIFICATION.seg.model import ObjSegNet
 
 
@@ -65,17 +65,18 @@ def main():
     assert len(tr_ds) > 0, f"no training images under {TRAIN_ROOT}"
     assert len(va_ds) > 0, f"no validation images under {VAL_ROOT}"
 
-    # COCO-style baseline: uniform class weights + random shuffle.
-    # EXCEPTION: person (class 1) gets a controlled bump because v1 and v2
-    # both produced person IoU = 0 from the gate. Person is the cascade
-    # gating class; without it the live app loses its main trigger. Bump
-    # is targeted (only person), unlike v1's auto-weighting which broke
-    # other classes. PERSON_WEIGHT env var (default 3.0) for tunability.
-    PERSON_WEIGHT = float(os.environ.get("PERSON_WEIGHT", 3.0))
+    # v4 loss: focal + Dice (RetinaNet/YOLOv5 style). Focal hard-example
+    # mining handles class imbalance at the per-pixel level, addressing
+    # the v1-v3 person collapse. Person also gets a small alpha bump for
+    # belt-and-suspenders. LOSS env var: 'focal' (default) | 'ce'.
+    LOSS_KIND = os.environ.get("LOSS", "focal").lower()
+    PERSON_WEIGHT = float(os.environ.get("PERSON_WEIGHT", 2.0))
+    FOCAL_GAMMA = float(os.environ.get("FOCAL_GAMMA", 2.0))
     cw = torch.ones(NUM_CLASSES, device=device)
     cw[1] = PERSON_WEIGHT  # CLASS_NAMES[1] == "person"
     class_weights = cw if PERSON_WEIGHT != 1.0 else None
-    print(f"[{RUN_TAG}] person class weight: {PERSON_WEIGHT}", flush=True)
+    print(f"[{RUN_TAG}] loss={LOSS_KIND} | person_weight={PERSON_WEIGHT} | "
+          f"focal_gamma={FOCAL_GAMMA}", flush=True)
 
     kw = dict(num_workers=WORKERS, persistent_workers=(WORKERS > 0))
     tr_ld = DataLoader(tr_ds, batch_size=BATCH, shuffle=True, drop_last=True, **kw)
@@ -86,7 +87,7 @@ def main():
 
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WD)
     total_steps = max(1, EPOCHS * len(tr_ld))
-    warmup_steps = min(1000, total_steps // 10)
+    warmup_steps = min(3000, total_steps // 10)  # YOLOv5 default for from-scratch
 
     def lr_lambda(step):
         if step < warmup_steps:
@@ -122,6 +123,13 @@ def main():
         print(f"[{RUN_TAG}] resumed at epoch {start_epoch} "
               f"(best mIoU {best_miou:.4f}, no_improve {no_improve}/{PATIENCE})", flush=True)
 
+    def _loss(logits, y):
+        if LOSS_KIND == "focal":
+            return focal_dice_loss(logits, y, num_classes=NUM_CLASSES,
+                                   class_weights=class_weights, gamma=FOCAL_GAMMA)
+        return ce_dice_loss(logits, y, num_classes=NUM_CLASSES,
+                            class_weights=class_weights)
+
     @torch.no_grad()
     def evaluate(loader):
         model.eval()
@@ -130,8 +138,7 @@ def main():
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
-            loss = ce_dice_loss(logits, y, num_classes=NUM_CLASSES,
-                                class_weights=class_weights)
+            loss = _loss(logits, y)
             tot_loss += loss.item() * x.size(0); n += x.size(0)
             acc.update(logits.cpu(), y.cpu())
         iou = per_class_iou(acc.confusion)
@@ -146,8 +153,7 @@ def main():
         for bi, (x, y) in enumerate(tr_ld):
             x, y = x.to(device), y.to(device)
             opt.zero_grad()
-            loss = ce_dice_loss(model(x), y, num_classes=NUM_CLASSES,
-                                class_weights=class_weights)
+            loss = _loss(model(x), y)
             loss.backward(); opt.step(); sched.step()
             tot_loss += loss.item() * x.size(0); n += x.size(0); step += 1
             if bi % 50 == 0:
