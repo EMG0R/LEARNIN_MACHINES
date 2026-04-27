@@ -35,22 +35,13 @@
     "/m/03nfch": 11,
     "/m/06k2mb": 11,
     "/m/09kjlm": 11,
-    "/m/0jyfg": 12,
-    "/m/017ftj": 12,
-    "/m/01b7fy": 13,
-    "/m/01mzpv": 14,
-    "/m/02crq1": 15,
-    "/m/078n6m": 16,
-    "/m/0h8n5zk": 16,
-    "/m/01y9k5": 16,
-    "/m/0dtln": 17,
-    "/m/0bt_c3": 18,
-    "/m/01x3z": 19,
-    "/m/080hkjn": 20,
-    "/m/01940j": 20,
-    "/m/0342h": 21,
-    "/m/07gql": 22,
-    "/m/05r5c": 23
+    "/m/02crq1": 12,
+    "/m/0bt_c3": 13,
+    "/m/01x3z": 14,
+    "/m/080hkjn": 15,
+    "/m/01940j": 15,
+    "/m/0342h": 16,
+    "/m/05r5c": 17
   },
   "by_class": {
     "1": [
@@ -217,65 +208,23 @@
     ],
     "12": [
       {
-        "name": "Glasses",
-        "mid": "/m/0jyfg"
-      },
-      {
-        "name": "Sunglasses",
-        "mid": "/m/017ftj"
-      }
-    ],
-    "13": [
-      {
-        "name": "Headphones",
-        "mid": "/m/01b7fy"
-      }
-    ],
-    "14": [
-      {
-        "name": "Chair",
-        "mid": "/m/01mzpv"
-      }
-    ],
-    "15": [
-      {
         "name": "Couch",
         "mid": "/m/02crq1"
       }
     ],
-    "16": [
-      {
-        "name": "Coffee table",
-        "mid": "/m/078n6m"
-      },
-      {
-        "name": "Kitchen & dining room table",
-        "mid": "/m/0h8n5zk"
-      },
-      {
-        "name": "Desk",
-        "mid": "/m/01y9k5"
-      }
-    ],
-    "17": [
-      {
-        "name": "Lamp",
-        "mid": "/m/0dtln"
-      }
-    ],
-    "18": [
+    "13": [
       {
         "name": "Book",
         "mid": "/m/0bt_c3"
       }
     ],
-    "19": [
+    "14": [
       {
         "name": "Clock",
         "mid": "/m/01x3z"
       }
     ],
-    "20": [
+    "15": [
       {
         "name": "Handbag",
         "mid": "/m/080hkjn"
@@ -285,19 +234,13 @@
         "mid": "/m/01940j"
       }
     ],
-    "21": [
+    "16": [
       {
         "name": "Guitar",
         "mid": "/m/0342h"
       }
     ],
-    "22": [
-      {
-        "name": "Trumpet",
-        "mid": "/m/07gql"
-      }
-    ],
-    "23": [
+    "17": [
       {
         "name": "Piano",
         "mid": "/m/05r5c"

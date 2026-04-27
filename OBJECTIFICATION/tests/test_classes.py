@@ -1,9 +1,9 @@
 from OBJECTIFICATION.seg.classes import MERGE_GROUPS, CLASS_NAMES, NUM_CLASSES
 
-def test_23_foreground_classes():
-    assert NUM_CLASSES == 24  # 23 + background
+def test_17_foreground_classes():
+    assert NUM_CLASSES == 18  # 17 + background
     assert CLASS_NAMES[0] == "background"
-    assert len(CLASS_NAMES) == 24
+    assert len(CLASS_NAMES) == 18
 
 def test_every_class_has_at_least_one_oi_label():
     for class_id, oi_labels in MERGE_GROUPS.items():
@@ -17,5 +17,5 @@ def test_no_duplicate_oi_labels_across_classes():
             seen.add(label)
 
 def test_class_names_match_merge_groups_keys():
-    for class_id in range(1, 24):
+    for class_id in range(1, NUM_CLASSES):
         assert class_id in MERGE_GROUPS

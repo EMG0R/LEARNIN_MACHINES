@@ -7,6 +7,31 @@ from typing import Iterable, Tuple
 import numpy as np
 from PIL import Image
 
+from OBJECTIFICATION.seg.classes import CLASS_NAMES
+
+
+# Painting priority: bigger, more "background-like" objects painted FIRST,
+# subjects painted LAST so they win on overlap. Person is ALWAYS top priority
+# because v1 collapsed when person pixels got overwritten by co-occurring
+# objects (vehicle, animal, couch). Lower number = painted earlier (loses on
+# overlap). Higher number = painted later (wins on overlap). Class IDs are
+# resolved by name at module-load time so renumbering classes.py is safe.
+_PAINT_PRIORITY_BY_NAME = {
+    "plant":      1,   # background foliage
+    "couch":      1,   # large furniture
+    "vehicle":    2,
+    "device":     2,
+    "skateboard": 5,
+    "animal":     5,
+    "person":     10,  # paint last, always wins on overlap
+}
+_NAME_TO_ID = {n: i for i, n in enumerate(CLASS_NAMES)}
+PAINT_PRIORITY = {
+    _NAME_TO_ID[name]: pri
+    for name, pri in _PAINT_PRIORITY_BY_NAME.items()
+    if name in _NAME_TO_ID
+}
+
 
 def combine_instance_masks(
     masks: Iterable[Tuple[Path, str]],
@@ -16,17 +41,24 @@ def combine_instance_masks(
     """Combine per-instance binary masks into a single integer mask.
 
     masks: iterable of (mask_path, oi_mid) pairs
-    mid_to_class: dict OI MID -> merged class ID (1..23)
+    mid_to_class: dict OI MID -> merged class ID
     image_size: (W, H) of the parent image; instance masks resize to this.
     Returns: PIL 'L' image, pixel value = class id (0 = background).
-    Last-write-wins for overlapping instances.
+
+    Painting order is class-priority based (see PAINT_PRIORITY). Person (cls=1)
+    is always painted last so it wins overlaps with co-occurring objects.
     """
     W, H = image_size
     out = np.zeros((H, W), dtype=np.uint8)
+    # Resolve and sort by priority (low priority first; high last = wins on top)
+    resolved = []
     for mask_path, mid in masks:
         cls = mid_to_class.get(mid)
         if cls is None:
             continue
+        resolved.append((PAINT_PRIORITY.get(cls, 3), mask_path, cls))
+    resolved.sort(key=lambda r: r[0])
+    for _, mask_path, cls in resolved:
         m = Image.open(mask_path).convert("L").resize((W, H), Image.NEAREST)
         m_arr = (np.array(m) > 127)
         out[m_arr] = cls
