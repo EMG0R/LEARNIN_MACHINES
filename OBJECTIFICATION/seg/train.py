@@ -18,10 +18,10 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader
 
 from OBJECTIFICATION.seg.augment import SegTransform
-from OBJECTIFICATION.seg.classes import NUM_CLASSES
+from OBJECTIFICATION.seg.classes import CLASS_NAMES, NUM_CLASSES
 from OBJECTIFICATION.seg.dataset import OpenImagesSegDataset
 from OBJECTIFICATION.seg.eval import ConfusionAccumulator, macro_miou, per_class_iou
 from OBJECTIFICATION.seg.losses import ce_dice_loss
@@ -51,6 +51,7 @@ CKPT_DIR = Path(__file__).resolve().parent / "checkpoints"
 CKPT_DIR.mkdir(exist_ok=True)
 CKPT_PATH = CKPT_DIR / f"obj_seg_{RUN_TAG}.pt"
 LOG_PATH  = CKPT_DIR / f"obj_seg_{RUN_TAG}.log.json"
+LAST_PATH = CKPT_DIR / f"obj_seg_{RUN_TAG}.last.pt"
 
 
 def main():
@@ -64,22 +65,14 @@ def main():
     assert len(tr_ds) > 0, f"no training images under {TRAIN_ROOT}"
     assert len(va_ds) > 0, f"no validation images under {VAL_ROOT}"
 
-    class_freq = tr_ds.class_freq(NUM_CLASSES).astype(np.float64)
-    nonzero = class_freq[class_freq > 0]
-    median = float(np.median(nonzero)) if len(nonzero) else 1.0
-    cw = np.ones(NUM_CLASSES, dtype=np.float32)
-    for c in range(1, NUM_CLASSES):
-        if class_freq[c] > 0:
-            cw[c] = float(np.clip(median / class_freq[c], 0.5, 5.0))
-    class_weights = torch.tensor(cw, device=device)
-
-    sample_weights = tr_ds.sample_weights(NUM_CLASSES)
-    sampler = WeightedRandomSampler(
-        weights=sample_weights, num_samples=len(tr_ds), replacement=True
-    )
+    # COCO-style: no per-class CE weighting, no weighted sampler. Manual
+    # reweighting suppressed the most frequent class (person -> IoU 0) in v1.
+    # Class imbalance is handled by Dice loss (intrinsically class-balanced)
+    # plus enough training data per class. Random shuffle each epoch.
+    class_weights = None
 
     kw = dict(num_workers=WORKERS, persistent_workers=(WORKERS > 0))
-    tr_ld = DataLoader(tr_ds, batch_size=BATCH, sampler=sampler, drop_last=True, **kw)
+    tr_ld = DataLoader(tr_ds, batch_size=BATCH, shuffle=True, drop_last=True, **kw)
     va_ld = DataLoader(va_ds, batch_size=BATCH, shuffle=False, **kw)
 
     model = ObjSegNet(num_classes=NUM_CLASSES).to(device)
@@ -102,6 +95,27 @@ def main():
     print(f"[{RUN_TAG}] img={IMG_SIZE} batch={BATCH} epochs={EPOCHS} lr={LR} "
           f"workers={WORKERS} smoke={SMOKE}", flush=True)
 
+    # Initialize training state (may be overridden by resume below)
+    start_epoch = 0
+    best_miou = -1.0
+    no_improve = 0
+    history = []
+    step = 0
+
+    if LAST_PATH.exists():
+        print(f"[{RUN_TAG}] resuming from {LAST_PATH}", flush=True)
+        state = torch.load(LAST_PATH, map_location=device, weights_only=False)
+        model.load_state_dict(state["model_state_dict"])
+        opt.load_state_dict(state["optimizer_state_dict"])
+        sched.load_state_dict(state["scheduler_state_dict"])
+        start_epoch = state["epoch"] + 1
+        best_miou = state["best_miou"]
+        no_improve = state["no_improve"]
+        history = state["history"]
+        step = state["step"]
+        print(f"[{RUN_TAG}] resumed at epoch {start_epoch} "
+              f"(best mIoU {best_miou:.4f}, no_improve {no_improve}/{PATIENCE})", flush=True)
+
     @torch.no_grad()
     def evaluate(loader):
         model.eval()
@@ -118,11 +132,8 @@ def main():
         return {"loss": tot_loss / max(1, n), "miou": macro_miou(iou),
                 "per_class_iou": iou.tolist()}
 
-    history = []
-    best_miou = -1.0; no_improve = 0
     t0 = time.time()
-    step = 0
-    for ep in range(EPOCHS):
+    for ep in range(start_epoch, EPOCHS):
         model.train()
         tot_loss, n = 0.0, 0
         t_ep = time.time()
@@ -156,11 +167,35 @@ def main():
             no_improve += 1
 
         history.append({"epoch": ep, "tr_loss": tr_loss,
-                        "val_loss": val["loss"], "val_miou": val["miou"]})
+                        "val_loss": val["loss"], "val_miou": val["miou"],
+                        "per_class_iou": val["per_class_iou"]})
         flag = " *NEW BEST*" if improved else ""
         print(f"[{RUN_TAG}] ep {ep:2d} | tr {tr_loss:.4f} | "
               f"vl {val['loss']:.4f} | mIoU {val['miou']:.4f}{flag} | "
               f"total {time.time()-t0:.0f}s", flush=True)
+
+        # Spot weakest classes — catches v1-style person=0 collapse early.
+        weak = [(CLASS_NAMES[i], v) for i, v in enumerate(val["per_class_iou"])
+                if i > 0 and v < 0.10]
+        if weak:
+            print(f"[{RUN_TAG}]   weak: " + ", ".join(f"{n}={v:.2f}" for n, v in weak), flush=True)
+
+        # Save resume checkpoint atomically (write tmp, then rename)
+        last_state = {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": opt.state_dict(),
+            "scheduler_state_dict": sched.state_dict(),
+            "epoch": ep,
+            "best_miou": best_miou,
+            "no_improve": no_improve,
+            "history": history,
+            "step": step,
+            "img_size": IMG_SIZE,
+            "num_classes": NUM_CLASSES,
+        }
+        tmp_path = LAST_PATH.with_suffix(".pt.tmp")
+        torch.save(last_state, tmp_path)
+        tmp_path.replace(LAST_PATH)
 
         if SMOKE:
             break
