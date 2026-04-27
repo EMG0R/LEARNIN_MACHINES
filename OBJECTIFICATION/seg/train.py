@@ -65,11 +65,17 @@ def main():
     assert len(tr_ds) > 0, f"no training images under {TRAIN_ROOT}"
     assert len(va_ds) > 0, f"no validation images under {VAL_ROOT}"
 
-    # COCO-style: no per-class CE weighting, no weighted sampler. Manual
-    # reweighting suppressed the most frequent class (person -> IoU 0) in v1.
-    # Class imbalance is handled by Dice loss (intrinsically class-balanced)
-    # plus enough training data per class. Random shuffle each epoch.
-    class_weights = None
+    # COCO-style baseline: uniform class weights + random shuffle.
+    # EXCEPTION: person (class 1) gets a controlled bump because v1 and v2
+    # both produced person IoU = 0 from the gate. Person is the cascade
+    # gating class; without it the live app loses its main trigger. Bump
+    # is targeted (only person), unlike v1's auto-weighting which broke
+    # other classes. PERSON_WEIGHT env var (default 3.0) for tunability.
+    PERSON_WEIGHT = float(os.environ.get("PERSON_WEIGHT", 3.0))
+    cw = torch.ones(NUM_CLASSES, device=device)
+    cw[1] = PERSON_WEIGHT  # CLASS_NAMES[1] == "person"
+    class_weights = cw if PERSON_WEIGHT != 1.0 else None
+    print(f"[{RUN_TAG}] person class weight: {PERSON_WEIGHT}", flush=True)
 
     kw = dict(num_workers=WORKERS, persistent_workers=(WORKERS > 0))
     tr_ld = DataLoader(tr_ds, batch_size=BATCH, shuffle=True, drop_last=True, **kw)
