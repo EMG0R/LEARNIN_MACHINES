@@ -25,9 +25,22 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import os
 ROOT = Path(__file__).resolve().parent.parent
-ANNOT_DIR = ROOT / "shared" / "datasets" / "openimages_v7" / "annotations"
-DATA_DIR  = ROOT / "shared" / "datasets" / "openimages_v7"
+# ANNOT_DIR holds the seg-annotation CSVs and the per-hex mask zips. These
+# are downloaded once and reusable across runs — defaults to the original
+# (potentially root-owned) location so we don't re-download ~5 GB of zips.
+ANNOT_DIR = Path(os.environ.get(
+    "OBJ_ANNOT_DIR",
+    str(ROOT / "shared" / "datasets" / "openimages_v7" / "annotations"),
+))
+# DATA_DIR is where per-split images, instance_masks, and instance_index.json
+# get written. OBJ_DATA_ROOT lets you point this at a user-owned location to
+# bypass sudo issues with old root-owned downloads.
+DATA_DIR  = Path(os.environ.get(
+    "OBJ_DATA_ROOT",
+    str(ROOT / "shared" / "datasets" / "openimages_v7"),
+))
 CLASS_MAP_PATH = ROOT / "seg" / "class_map.json"
 
 SPLIT_URL_NAME = {"train": "train", "val": "validation", "test": "test"}
