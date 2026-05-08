@@ -31,7 +31,7 @@ from combined_app.config import (
     FACE_CLASS_SKIN, FACE_CLASS_EYE_L, FACE_CLASS_EYE_R, FACE_CLASS_MOUTH,
     GESTURE_COLORS_BGR,
     FACE_DET_CKPT, FACE_PARTS_CKPT, EMOTION_CKPT,
-    MIRROR_FLIP, TONE_GAMMA, TONE_SAT_FACTOR, EFFECTS_OPACITY, EFFECTS_STEP,
+    MIRROR_FLIP,
     OBJECTIFICATION_ENABLED,
 )
 from combined_app.models import (
@@ -41,12 +41,24 @@ from combined_app.models import (
     run_face_det, run_face_parts, run_emotion_batch, EmotionSmoother,
 )
 from combined_app.renderer import (
-    draw_mesh, draw_label, draw_face_aura, label_anchor_raw,
+    draw_mesh, draw_label, draw_face_aura, label_anchor_raw, object_label_anchors,
     draw_clock, draw_label_strip,
 )
-from combined_app.effects import FlowField
-from combined_app.tone import build_lut, apply_grade
-from combined_app.objectification_model import load_objectification, run_objectification
+# FlowField + tone grade removed (no color filter on background).
+from combined_app.objectification_model import (
+    load_objectification, run_objectification, run_objectification_recurse,
+)
+
+# Object overlay aesthetic: dark purple translucent fill + near-white outlines + labels above
+OBJ_FILL_BGR    = (110, 30, 90)
+OBJ_OUTLINE_BGR = (220, 220, 220)
+OBJ_LABEL_BGR   = (220, 220, 220)
+OBJ_FILL_ALPHA  = 0.22
+OBJ_OUTLINE_W   = 2
+
+# GPU throttling: OBJ is the heaviest model. Run sparingly, EMA smooths it.
+OBJ_INTERVAL    = 4   # run OBJ every Nth inference cycle
+REC_INTERVAL    = 8   # run object-on-object recursion every Mth (less often)
 
 FACE_DET_INTERVAL = 8
 N_ZONES           = 3
@@ -88,6 +100,10 @@ def _capture_loop(cap, shared, stop_event):
         ret, frame = cap.read()
         if not ret:
             continue
+        # Mirror BEFORE sharing — inference + mesh + display all see the same
+        # flipped frame so overlays land on the correct body part.
+        if MIRROR_FLIP:
+            frame = cv2.flip(frame, 1)
         with shared["frame_lock"]:
             shared["frame"] = frame
 
@@ -108,6 +124,9 @@ def _inference_loop(models, shared, stop_event):
     parts_cache   = None
     parts_counter = 0
     det_countdown = 0
+    obj_tick      = 0
+    obj_cache     = None       # cached primary OBJ result for skipped frames
+    rec_cache     = []         # cached object-on-object detections
 
     while not stop_event.is_set():
         with shared["frame_lock"]:
@@ -118,8 +137,17 @@ def _inference_loop(models, shared, stop_event):
 
         h, w  = frame.shape[:2]
 
-        # ── OBJECTIFICATION (Layer 1) ─────────────────────────────────────────
-        obj_result = run_objectification(frame, obj_model)
+        # ── OBJECTIFICATION (Layer 1) — heavily throttled, EMA-smoothed ──────
+        # Heaviest model in the pipeline. Run only every Nth cycle; reuse
+        # cached result for display frames in between. EMA on softmax probs
+        # makes the throttled rate look continuous.
+        obj_tick += 1
+        if obj_model is not None and obj_tick % OBJ_INTERVAL == 0:
+            obj_cache = run_objectification(frame, obj_model)
+        obj_result = obj_cache
+        # Object-on-object recursion (zoom-in pass on phones/devices)
+        if obj_model is not None and obj_result and obj_tick % REC_INTERVAL == 0:
+            rec_cache = run_objectification_recurse(frame, obj_model, obj_result)
 
         s     = h
         x_off = [0, (w - s) // 2, w - s]
@@ -213,6 +241,7 @@ def _inference_loop(models, shared, stop_event):
             shared["face_active"]  = face_active
             shared["em"]           = em
             shared["obj_result"]   = obj_result
+            shared["rec_result"]   = rec_cache
 
 
 def main():
@@ -237,6 +266,7 @@ def main():
         "skin_mask": None, "region_masks": {},
         "face_active": False, "em": {"emotion": "neutral", "confidence": 0.0},
         "obj_result": None,
+        "rec_result": [],
     }
     stop_event = threading.Event()
 
@@ -253,9 +283,6 @@ def main():
     pygame.display.set_caption("LEARNIN_MACHINES")
     print(f"[display] pygame fullscreen {SCREEN_W}x{SCREEN_H}")
 
-    flow = FlowField(SCREEN_H, SCREEN_W, opacity=EFFECTS_OPACITY, step=EFFECTS_STEP)
-    lut  = build_lut(gamma=TONE_GAMMA)
-    flow.tick()  # pre-warm buffer so first frame isn't black
     show_fps = False
 
     fps       = 0.0
@@ -288,6 +315,7 @@ def main():
             face_active  = shared["face_active"]
             em           = shared["em"]
             obj_result   = shared["obj_result"]
+            rec_result   = shared.get("rec_result", [])
 
         h, w = frame.shape[:2]
         if hand_mask is None:
@@ -303,30 +331,52 @@ def main():
         fps    = 0.9 * fps + 0.1 / max(t_now - t_prev, 1e-6)
         t_prev = t_now
 
-        # Mirror pipeline: flip → grade → effects → overlays → HUD
-        if MIRROR_FLIP:
-            frame = cv2.flip(frame, 1)
-        rendered = apply_grade(frame, lut, sat_factor=TONE_SAT_FACTOR)
-        flow.tick()
-        rendered = flow.blend_onto(rendered)
+        # Frame is already mirrored at capture; no per-frame flip / no color grade.
+        rendered = frame.copy()
 
-        # ── OBJECTIFICATION overlays ─────────────────────────────────────────
+        # ── OBJECTIFICATION overlays — dark purple mesh + outlines + labels ──
         if obj_result and obj_result["enabled"]:
-            fills = []  # (contours, color)
+            fills = []   # (contours, mask, name)
             for cls_name, mask in obj_result["class_map"].items():
                 if cls_name == "person":
                     continue
-                color = _OBJ_COLORS.get(cls_name, (160, 160, 160))
                 contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                contours = [c for c in contours if cv2.contourArea(c) >= 600]
                 if contours:
-                    fills.append((contours, color))
+                    fills.append((contours, mask, cls_name))
             if fills:
                 overlay = rendered.copy()
-                for contours, color in fills:
-                    cv2.drawContours(overlay, contours, -1, color, -1)
-                rendered = cv2.addWeighted(rendered, 0.85, overlay, 0.15, 0)
-                for contours, color in fills:
-                    cv2.drawContours(rendered, contours, -1, color, 1)
+                for contours, _m, _n in fills:
+                    cv2.drawContours(overlay, contours, -1, OBJ_FILL_BGR, -1)
+                rendered = cv2.addWeighted(rendered, 1.0 - OBJ_FILL_ALPHA,
+                                           overlay, OBJ_FILL_ALPHA, 0)
+                for contours, _m, _n in fills:
+                    cv2.drawContours(rendered, contours, -1, OBJ_OUTLINE_BGR,
+                                     OBJ_OUTLINE_W, cv2.LINE_AA)
+                for _c, mask, cls_name in fills:
+                    for pos in object_label_anchors(mask, h, w):
+                        rendered = draw_label(rendered, pos, cls_name,
+                                              OBJ_LABEL_BGR, 1.0)
+
+        # ── Object-on-object: zoom-in detections drawn on top of primary ─────
+        if rec_result:
+            for sec in rec_result:
+                carrier = sec["carrier"]
+                for cls_name, mask in sec["class_map"].items():
+                    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    contours = [c for c in contours if cv2.contourArea(c) >= 600]
+                    if not contours:
+                        continue
+                    overlay = rendered.copy()
+                    cv2.drawContours(overlay, contours, -1, OBJ_FILL_BGR, -1)
+                    rendered = cv2.addWeighted(rendered, 1.0 - OBJ_FILL_ALPHA * 0.8,
+                                               overlay, OBJ_FILL_ALPHA * 0.8, 0)
+                    cv2.drawContours(rendered, contours, -1, (255, 255, 255),
+                                     OBJ_OUTLINE_W, cv2.LINE_AA)
+                    for pos in object_label_anchors(mask, h, w):
+                        rendered = draw_label(rendered, pos,
+                                              f"{cls_name} on {carrier}",
+                                              (255, 255, 255), 1.0)
 
         if mesh_fade > 0.01:
             gidx  = g.get("gesture_idx", 0)

@@ -29,12 +29,32 @@ class OpenImagesSegDataset(Dataset):
         return len(self.ids)
 
     def __getitem__(self, k):
-        iid = self.ids[k]
-        img  = Image.open(self.root / "images" / f"{iid}.jpg").convert("RGB")
-        mask = Image.open(self.root / "masks"  / f"{iid}.png")
-        if self.transform is not None:
-            return self.transform(img, mask)
-        return img, mask
+        # Robust to corrupted/truncated images: on any read error, fall
+        # through to the next valid sample instead of crashing the
+        # whole training loop. A handful of bad files in a 300K-image
+        # mixed-source dataset (OI + COCO) is normal — log first 10 and
+        # then go silent.
+        n = len(self.ids)
+        for off in range(n):
+            iid = self.ids[(k + off) % n]
+            try:
+                img  = Image.open(self.root / "images" / f"{iid}.jpg").convert("RGB")
+                # Force "L" mode (8-bit single channel) so values are always
+                # uint8 0-255. Some PNGs save as 16-bit or palette mode, which
+                # would produce out-of-range pixel values that crash the loss.
+                mask = Image.open(self.root / "masks"  / f"{iid}.png").convert("L")
+                img.load(); mask.load()  # force decode now so errors surface here
+                if self.transform is not None:
+                    return self.transform(img, mask)
+                return img, mask
+            except Exception as e:
+                if not hasattr(self, "_bad_seen"):
+                    self._bad_seen = set()
+                if iid not in self._bad_seen and len(self._bad_seen) < 10:
+                    print(f"[dataset] skip corrupted {iid}: {type(e).__name__}", flush=True)
+                self._bad_seen.add(iid)
+                continue
+        raise RuntimeError("all images in dataset are corrupted — abort")
 
     def class_freq(self, num_classes: int) -> np.ndarray:
         """Pixel count per class, summed over the whole dataset.

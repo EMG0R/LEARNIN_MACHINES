@@ -23,12 +23,17 @@ def dice_loss(logits, target, num_classes, eps=1e-6, ignore_index=IGNORE_INDEX):
 
     logits: (B, C, H, W) raw scores
     target: (B, H, W) long, values in [0, C) or = ignore_index
+
+    MPS-safe: uses torch.where() instead of boolean assignment (which has
+    indexing bugs on MPS — caused random crashes mid-epoch in v5). Also
+    clamps target into valid range as defense-in-depth against any rogue
+    pixel values from corrupted masks.
     """
     valid = (target != ignore_index)
-    target_clamped = target.clone()
-    target_clamped[~valid] = 0
-    one_hot = F.one_hot(target_clamped, num_classes=num_classes)  # (B, H, W, C)
-    one_hot = one_hot.permute(0, 3, 1, 2).float()                  # (B, C, H, W)
+    target_safe = torch.where(valid, target, torch.zeros_like(target))
+    target_safe = target_safe.clamp(0, num_classes - 1)
+    one_hot = F.one_hot(target_safe, num_classes=num_classes)        # (B, H, W, C)
+    one_hot = one_hot.permute(0, 3, 1, 2).float()                    # (B, C, H, W)
     one_hot = one_hot * valid.unsqueeze(1).float()
 
     probs = F.softmax(logits, dim=1) * valid.unsqueeze(1).float()
@@ -55,16 +60,18 @@ def focal_loss(logits, target, alpha=None, gamma=2.0, ignore_index=IGNORE_INDEX)
              value is 2.0.
     """
     valid = (target != ignore_index)
-    target_clamped = target.clone()
-    target_clamped[~valid] = 0
+    # MPS-safe: torch.where + clamp instead of boolean indexing assignment.
+    target_safe = torch.where(valid, target, torch.zeros_like(target))
+    num_classes = logits.shape[1]
+    target_safe = target_safe.clamp(0, num_classes - 1)
 
     log_probs = F.log_softmax(logits, dim=1)              # (B, C, H, W)
-    log_p_t = log_probs.gather(1, target_clamped.unsqueeze(1)).squeeze(1)  # (B, H, W)
+    log_p_t = log_probs.gather(1, target_safe.unsqueeze(1)).squeeze(1)  # (B, H, W)
     p_t = log_p_t.exp()
     focal = (1.0 - p_t) ** gamma                          # (B, H, W)
 
     if alpha is not None:
-        alpha_t = alpha[target_clamped]                   # (B, H, W)
+        alpha_t = alpha[target_safe]                      # (B, H, W)
         loss = -alpha_t * focal * log_p_t
     else:
         loss = -focal * log_p_t

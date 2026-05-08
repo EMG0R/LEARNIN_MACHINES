@@ -132,6 +132,35 @@ def label_anchor_raw(mask: np.ndarray, frame_h: int, frame_w: int):
     return (x, y)
 
 
+def object_label_anchors(mask: np.ndarray, frame_h: int, frame_w: int,
+                        min_area: int = 600, gap: int = 8) -> list:
+    """Return one label-anchor per connected component in `mask`.
+
+    Each anchor sits ABOVE the component's bbox top (matching hand/face
+    label style). If the bbox top is too close to the frame top, the anchor
+    flips DOWN onto the top edge of the object instead. Returns (x, y) tuples.
+    """
+    if mask is None or not mask.any():
+        return []
+    n, _labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    out = []
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] < min_area:
+            continue
+        x = int(stats[i, cv2.CC_STAT_LEFT])
+        y = int(stats[i, cv2.CC_STAT_TOP])
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        ax = max(4, min(frame_w - 120, x + bw // 2 - 40))
+        # putText baseline sits at the y coord; place baseline above bbox top
+        ay = y - gap
+        if ay - 18 < 4:
+            # Too close to frame top — overlay the top edge of the object
+            ay = min(frame_h - 2, y + 22)
+        out.append((ax, ay))
+    return out
+
+
 # ── Mesh draw ─────────────────────────────────────────────────────────────────
 
 def draw_mesh(frame: np.ndarray, mask: np.ndarray, color: tuple,

@@ -32,6 +32,12 @@ LOG_DIR = ROOT / "seg" / "checkpoints"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 SUMMARY_PATH = LOG_DIR / "train_all_summary.json"
 
+DL_TRAIN_PER_CLASS = int(os.environ.get("DL_TRAIN_PER_CLASS", 3000))
+DL_VAL_PER_CLASS   = int(os.environ.get("DL_VAL_PER_CLASS",   500))
+SKIP_DOWNLOAD      = bool(int(os.environ.get("SKIP_DOWNLOAD", 0)))
+
+DATA_ROOT = ROOT / "shared" / "datasets" / "openimages_v7"
+
 PAUSE_LEVELS = {"Trapping", "Sleeping"}   # Heavy is OK
 RESUME_LEVEL = "Nominal"
 POLL_SECS    = 3
@@ -118,6 +124,16 @@ def run_stage(name, cmd):
     return {"name": name, "exit": rc, "duration_s": round(dur, 1)}
 
 
+# ── HELPERS ───────────────────────────────────────────────────────────────────
+
+def split_ready(split: str) -> bool:
+    """True if {split}/masks/ has at least one PNG (i.e. prepare_masks ran)."""
+    masks_dir = DATA_ROOT / split / "masks"
+    if not masks_dir.exists():
+        return False
+    return any(masks_dir.glob("*.png"))
+
+
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -131,10 +147,17 @@ def main():
             flush=True,
         )
 
-    # Single stage for now; append more stages here when a second pass is needed.
-    stages = [
-        ("seg", [sys.executable, "-m", "OBJECTIFICATION.seg.train"]),
-    ]
+    stages = []
+    if not SKIP_DOWNLOAD:
+        for split, n in (("train", DL_TRAIN_PER_CLASS), ("val", DL_VAL_PER_CLASS)):
+            if not split_ready(split):
+                stages.append((f"download-{split}",
+                               [sys.executable, "-m", "OBJECTIFICATION.data_pipeline.download",
+                                "--split", split, "--max-per-class", str(n)]))
+                stages.append((f"prepare-{split}",
+                               [sys.executable, "-m", "OBJECTIFICATION.data_pipeline.prepare_masks",
+                                "--split", split]))
+    stages.append(("seg", [sys.executable, "-m", "OBJECTIFICATION.seg.train"]))
 
     summary = []
     for name, cmd in stages:

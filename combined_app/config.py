@@ -73,7 +73,10 @@ FACE_CLASS_SKIN       = 4
 # ── OBJECTIFICATION (Layer 1) ─────────────────────────────────────────────────
 from pathlib import Path as _Path
 _OBJ = REPO / "OBJECTIFICATION/seg/checkpoints"
-OBJ_CKPT = _OBJ / "best.pt" if (_OBJ / "best.pt").exists() else _OBJ / "obj_seg_integration.pt"
+# Pick the best available trained checkpoint, in preference order.
+_OBJ_CANDIDATES = ["obj_seg_v5.pt", "best.pt", "obj_seg_integration.pt"]
+OBJ_CKPT = next((_OBJ / n for n in _OBJ_CANDIDATES if (_OBJ / n).exists()),
+                _OBJ / "obj_seg_v5.pt")
 OBJ_SIZE = 320
 PERSON_MIN_AREA = 0.05   # fraction of frame for cascade gate
 OBJ_CONF_THRESHOLD = 0.5
