@@ -4,6 +4,7 @@
 
 # python envs
 .venv/
+venv/
 __pycache__/
 *.pyc
 
